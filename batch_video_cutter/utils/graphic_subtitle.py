@@ -421,14 +421,13 @@ def generate_top_caption_layer(
             else:
                 break
 
-        if split_idx == 0 or split_idx >= len(words):
-            split_idx = max(1, len(words) // 2)
+        if split_idx == 0:
+            split_idx = 1
 
-        line1_text = f'"{" ".join(words[:split_idx])}'
-        line2_text = f'{" ".join(words[split_idx:])}"' if split_idx < len(words) else f'{" ".join(words[:split_idx])}"'
-
-        # Đảm bảo câu 1 dòng duy nhất có dấu ngoặc kép kết thúc
-        if split_idx >= len(words):
+        if split_idx < len(words):
+            line1_text = f'"{" ".join(words[:split_idx])}'
+            line2_text = f'{" ".join(words[split_idx:])}"'
+        else:
             line1_text = f'"{" ".join(words)}"'
             line2_text = ""
 
