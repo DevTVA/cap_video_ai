@@ -122,7 +122,12 @@ def generate_graphic_subtitles(
 
         if not words_list:
             continue
-        chunk_size = 4
+        # Tính nhịp nói trung bình của phân đoạn (giây/từ)
+        line_duration = line.end - line.start
+        avg_word_dur = line_duration / max(1, len(words_list)) if line_duration > 0 else 0.3
+
+        # Nếu nhân vật nói nhanh (<0.28s/từ): gộp 2-3 từ/chunk; nếu nói bình thường: 3-4 từ/chunk
+        chunk_size = 3 if avg_word_dur < 0.28 else 4
         chunks = [words_list[i:i + chunk_size] for i in range(0, len(words_list), chunk_size)]
 
         for chunk_idx, chunk in enumerate(chunks):
@@ -148,9 +153,19 @@ def generate_graphic_subtitles(
                             logger.warning(f"Không thể nạp ảnh emoji {emoji_png_path}: {e}")
                             emoji_img = None
 
-            mid_point = len(chunk) // 2 if len(chunk) >= 3 else len(chunk)
-            line1_words = chunk[:mid_point]
-            line2_words = chunk[mid_point:]
+            # Đo độ rộng cả chunk để quyết định hiển thị 1 DÒNG ĐƠN hay 2 dòng
+            chunk_full_text = " ".join(w[0].upper().strip() for w in chunk)
+            chunk_bbox = font.getbbox(chunk_full_text)
+            chunk_w = chunk_bbox[2] - chunk_bbox[0]
+
+            # Ưu tiên 1 DÒNG ĐƠN nếu tổng độ rộng <= 750px hoặc <= 3 từ (tránh nhấp nháy 2 dòng khi nói nhanh)
+            if chunk_w <= 750 or len(chunk) <= 3:
+                line1_words = chunk
+                line2_words = []
+            else:
+                mid_point = len(chunk) // 2
+                line1_words = chunk[:mid_point]
+                line2_words = chunk[mid_point:]
 
             # Render từng mốc thoại trong chunk
             for active_idx, active_word_info in enumerate(chunk):
@@ -353,39 +368,38 @@ def generate_top_caption_layer(
     draw = ImageDraw.Draw(img)
 
     line_boxes = []
+    max_line_w = 0
     total_text_h = 0
     for line in lines:
         bbox = font.getbbox(line)
         w = bbox[2] - bbox[0]
         h = bbox[3] - bbox[1]
         line_boxes.append((line, w, h))
-        total_text_h += h + 16
+        max_line_w = max(max_line_w, w)
+        total_text_h += h + 12
 
-    total_text_h -= 16
+    total_text_h -= 12
 
-    pad_h = 14
-    pad_w = 28
-    badge_total_h = total_text_h + pad_h * 2
-    start_y = max(20, (top_area_height - badge_total_h) // 2)
+    pad_h = 16
+    pad_w = 32
+    badge_w = max_line_w + pad_w * 2
+    badge_h = total_text_h + pad_h * 2
 
-    curr_y = start_y
+    # Căn giữa dọc 100% trong dải 280px nền đen phía trên (giống 100% Ảnh 3 mẫu)
+    badge_x1 = (canvas_size[0] - badge_w) // 2
+    badge_y1 = max(10, (top_area_height - badge_h) // 2)
+    badge_x2 = badge_x1 + badge_w
+    badge_y2 = badge_y1 + badge_h
+
+    # Vẽ 1 BADGE NỀN TRẮNG BO GÓC DUY NHẤT BAO BỌC TOÀN BỘ CÁC DÒNG CHỮ (Giống 100% Ảnh 3)
+    draw.rounded_rectangle([badge_x1, badge_y1, badge_x2, badge_y2], radius=16, fill=(255, 255, 255, 255))
+
+    # Vẽ các dòng Chữ Đen Viết Hoa ở giữa Badge
+    curr_y = badge_y1 + pad_h
     for line, w, h in line_boxes:
-        box_w = w + pad_w * 2
-        box_h = h + pad_h * 2
-        x1 = (canvas_size[0] - box_w) // 2
-        y1 = curr_y
-        x2 = x1 + box_w
-        y2 = y1 + box_h
-
-        # Vẽ Nền Trắng Bo Góc (White Rounded Pill Badge)
-        draw.rounded_rectangle([x1, y1, x2, y2], radius=14, fill=(255, 255, 255, 255))
-
-        # Vẽ Chữ Đen Viết Hoa ở giữa Badge
-        text_x = x1 + pad_w
-        text_y = y1 + pad_h - 2
-        draw.text((text_x, text_y), line, font=font, fill=(0, 0, 0, 255))
-
-        curr_y += box_h + 8
+        text_x = (canvas_size[0] - w) // 2
+        draw.text((text_x, curr_y), line, font=font, fill=(0, 0, 0, 255))
+        curr_y += h + 12
 
     output_png.parent.mkdir(parents=True, exist_ok=True)
     img.save(output_png, "PNG")
