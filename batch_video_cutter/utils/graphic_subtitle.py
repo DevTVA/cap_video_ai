@@ -7,6 +7,7 @@ and pastes HD Color 3D PNG Emojis directly to the right of the period on a trans
 Ensures 100% frame-accurate timing and exact pixel positioning.
 """
 
+import re
 from pathlib import Path
 from typing import List, Tuple, Optional
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
@@ -177,10 +178,11 @@ def generate_graphic_subtitles(
                 bbox2 = font.getbbox(l2_text) if l2_text else (0, 0, 0, 0)
                 l2_width = bbox2[2] - bbox2[0]
 
+                eff_margin_v = 270 if canvas_size[1] > 1080 else margin_v
                 if position == "top":
-                    base_y = 45  # Đặt vừa vặn trong dải caption 20% canvas phía trên (từ y=0 đến y=216)
+                    base_y = 45  # Đặt vừa vặn trong dải caption 20% canvas phía trên
                 else:
-                    base_y = canvas_size[1] - margin_v - font_size * (2 if l2_text else 1) - 20
+                    base_y = canvas_size[1] - eff_margin_v - font_size * (2 if l2_text else 1) - 20
 
                 y1 = base_y
                 y2 = base_y + font_size + 10
@@ -189,7 +191,9 @@ def generate_graphic_subtitles(
                 if l1_text:
                     x_cursor = (canvas_size[0] - l1_width) // 2
                     for idx, (word_text, _, _) in enumerate(line1_words):
-                        clean_w = word_text.upper().strip()
+                        clean_w = re.sub(r'>>+|[<>\[\]()]', '', word_text).upper().strip()
+                        if not clean_w:
+                            continue
                         color = active_rgba if idx == active_idx else primary_rgba
 
                         # Soft Drop Shadow
@@ -227,7 +231,9 @@ def generate_graphic_subtitles(
                 if l2_text:
                     x_cursor = (canvas_size[0] - l2_width) // 2
                     for idx, (word_text, _, _) in enumerate(line2_words, start=len(line1_words)):
-                        clean_w = word_text.upper().strip()
+                        clean_w = re.sub(r'>>+|[<>\[\]()]', '', word_text).upper().strip()
+                        if not clean_w:
+                            continue
                         color = active_rgba if idx == active_idx else primary_rgba
 
                         # Soft Drop Shadow

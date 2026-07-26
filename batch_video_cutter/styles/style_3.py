@@ -97,7 +97,7 @@ class Style3(BaseStyle):
             font_path = "C\\:/Windows/Fonts/impact.ttf"
             filters.append(
                 f"[styled]drawtext=fontfile='{font_path}':text='{safe_title}':fontcolor=white:"
-                f"fontsize=46:line_spacing=12:x=(w-text_w)/2:y=75:shadowcolor=black:shadowx=3:shadowy=3[styled_title]"
+                f"fontsize=46:line_spacing=12:x=(w-text_w)/2:y=(288-text_h)/2:shadowcolor=black:shadowx=3:shadowy=3[styled_title]"
             )
             output_label = "[styled_title]"
 
