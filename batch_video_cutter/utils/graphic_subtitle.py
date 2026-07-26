@@ -122,28 +122,24 @@ def generate_graphic_subtitles(
 
         if not words_list:
             continue
-        # Thuật toán ngắt nhịp thoại chuẩn theo nhịp thở, khoảng nghỉ và dấu câu thực tế của nhân vật:
+        # Thuật toán Đảm bảo Phụ đề ĐỦ MỘT CÂU HOÀN CHỈNH cho nhân vật nói (KHÔNG ngắt theo dấu câu/từ viết tắt như MR.):
         chunks = []
         curr_chunk = []
         for i, word_info in enumerate(words_list):
             w_text, w_start, w_end = word_info
             curr_chunk.append(word_info)
 
-            # 1. Dấu hiệu ngắt nhịp thoại theo dấu câu (., !, ?, ,, ;, :)
-            clean_w = re.sub(r'>>+|[<>\[\]()]', '', w_text).strip()
-            has_punctuation = bool(re.search(r'[.,!?;:]$', clean_w))
-
-            # 2. Khoảng ngắt nghỉ tự nhiên giữa 2 từ thoại > 0.22 giây
-            has_pause = False
+            # 1. KHÔNG ngắt khi gặp dấu câu! Chỉ ngắt khi khoảng lặng âm thanh giữa 2 từ > 0.45s (hít thở dài/ngắt câu mới)
+            has_large_pause = False
             if i < len(words_list) - 1:
                 next_start = words_list[i + 1][1]
-                if next_start - w_end > 0.22:
-                    has_pause = True
+                if next_start - w_end > 0.45:
+                    has_large_pause = True
 
-            # 3. Đạt số từ tối đa trong 1 cụm (3-4 từ)
-            reached_max_words = len(curr_chunk) >= 4
+            # 2. Ngắt khi đạt đủ số từ của một câu hoàn chỉnh (6-7 từ)
+            reached_max_words = len(curr_chunk) >= 6
 
-            if has_punctuation or has_pause or reached_max_words or i == len(words_list) - 1:
+            if has_large_pause or reached_max_words or i == len(words_list) - 1:
                 chunks.append(curr_chunk)
                 curr_chunk = []
 
