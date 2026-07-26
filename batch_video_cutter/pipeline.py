@@ -147,7 +147,7 @@ class PipelineOrchestrator:
                         sub_path = Path(tmp_dir) / f"sub_{clip_idx}.ass"
                         sub_position = style.get_subtitle_position()
 
-                        # Tạo subtitles chuẩn theo style
+                        # Tạo subtitles chuẩn theo style với độ phân giải canvas chuẩn xác
                         sub_path, timed_emojis = await loop.run_in_executor(
                             None,
                             functools.partial(
@@ -161,6 +161,7 @@ class PipelineOrchestrator:
                                 highlight_color_name=getattr(style, "get_highlight_color", lambda: "green")(),
                                 italic=getattr(style, "get_italic_option", lambda: False)(),
                                 add_emojis=True,
+                                canvas_size=style.get_output_resolution(),
                             )
                         )
 

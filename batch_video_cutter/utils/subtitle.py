@@ -7,7 +7,7 @@ Tạo file ASS subtitle với hiệu ứng CapCut Shorts / Reels word-by-word ac
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 from loguru import logger
 
@@ -200,6 +200,7 @@ def generate_ass_subtitle(
     position: str = "bottom",
     margin_v: int = 180,
     emoji_on_top: bool = True,            # Bật hiển thị Emoji sinh động màu sắc
+    canvas_size: Tuple[int, int] = (1080, 1080),
 ) -> Path:
     """Tạo file ASS subtitle CapCut hoặc Graphic Subtitle PNG Layer chuẩn 100% đồng bộ."""
     import random
@@ -222,6 +223,7 @@ def generate_ass_subtitle(
             highlight_color_name=highlight_color_name,
             margin_v=margin_v,
             emoji_on_top=True,
+            canvas_size=canvas_size,
         )
         return output_path, graphic_frames
 
@@ -325,6 +327,7 @@ def create_subtitles_from_transcript(
     highlight_color_name: str = "green",
     italic: bool = False,
     add_emojis: bool = True,
+    canvas_size: Tuple[int, int] = (1080, 1080),
 ) -> tuple:
     """Tạo file ASS subtitle CapCut Active Word từ transcript segments và trả về (sub_path, timed_emojis)."""
     subtitle_lines: List[SubtitleLine] = []
@@ -370,5 +373,6 @@ def create_subtitles_from_transcript(
         italic=italic,
         position=position,
         emoji_on_top=add_emojis,
+        canvas_size=canvas_size,
     )
 
