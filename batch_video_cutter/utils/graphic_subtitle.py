@@ -108,10 +108,18 @@ def generate_graphic_subtitles(
     frame_count = 0
 
     for line_idx, line in enumerate(subtitle_lines):
-        if not line.words:
-            continue
-
         words_list = line.words
+        if not words_list and line.text.strip():
+            raw_words = line.text.strip().split()
+            if raw_words and line.end > line.start:
+                dur = (line.end - line.start) / len(raw_words)
+                words_list = [
+                    (w, line.start + i * dur, line.start + (i + 1) * dur)
+                    for i, w in enumerate(raw_words)
+                ]
+
+        if not words_list:
+            continue
         chunk_size = 4
         chunks = [words_list[i:i + chunk_size] for i in range(0, len(words_list), chunk_size)]
 

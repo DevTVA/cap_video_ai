@@ -344,6 +344,16 @@ def create_subtitles_from_transcript(
                 if w_start < w_end:
                     words.append((word_seg.word, w_start, w_end))
 
+        # FALLBACK: Nếu Whisper không trả về mốc từ chi tiết (cho các video sau như 10, 11, 12), tự tạo mốc thời gian đều
+        if not words and seg.text.strip():
+            raw_words = seg.text.strip().split()
+            if raw_words and relative_end > relative_start:
+                duration_per_word = (relative_end - relative_start) / len(raw_words)
+                for i, w in enumerate(raw_words):
+                    w_start = relative_start + i * duration_per_word
+                    w_end = relative_start + (i + 1) * duration_per_word
+                    words.append((w, w_start, w_end))
+
         subtitle_lines.append(SubtitleLine(
             text=seg.text,
             start=relative_start,
