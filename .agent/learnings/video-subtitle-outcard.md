@@ -1,70 +1,62 @@
 # Video Subtitle & Outcard Processing
 
-> Tổng hợp kiến thức về hệ thống Phụ đề đồ họa Graphic Subtitle Layer, Emoji màu, tăng âm lượng 1.3x và Outcard overlay trong dự án.
-> Cập nhật lần cuối: 2026-07-26
+> Tổng hợp kiến thức về hệ thống Phụ đề đồ họa Graphic Subtitle Layer, Emoji màu, Top Caption Badge, tăng âm lượng 1.3x và Outcard overlay trong dự án.
+> Cập nhật lần cuối: 2026-07-27
 
 ---
 
 ## Architecture
 
-### Graphic Subtitle Layer bằng Pillow
-- **Ngày**: 2026-07-26
-- **Chi tiết**: Phụ đề chữ (kèm 3 màu active word highlight, viền đen mập `stroke_width=6`) và ảnh HD 3D Color PNG Emoji được render trực tiếp lên **1 tấm ảnh PNG trong suốt (RGBA 1080x1080)** cho mỗi mốc thoại. Vì chữ và emoji nằm trên cùng 1 tấm ảnh, chúng xuất hiện và biến mất **chính xác từng millisecond cùng lúc 100% (0ms độ trễ)**.
+### Graphic Subtitle Layer bằng Pillow & Commit 1 Restore
+- **Ngày**: 2026-07-27
+- **Chi tiết**: Phụ đề chữ (kèm 3 màu active word highlight, viền đen mập 8px 2-pass solid stroke) và ảnh HD 3D Color PNG Emoji được render trực tiếp lên **1 tấm ảnh PNG trong suốt (RGBA)** cho mỗi mốc thoại. Đã khôi phục chuẩn bản Commit 1 với `chunk_size = 4`, tự động chia 2 dòng căn giữa giúp phụ đề rõ ràng, đẹp mắt và đúng nguyên bản.
 - **Files liên quan**: `batch_video_cutter/utils/graphic_subtitle.py`, `batch_video_cutter/utils/subtitle.py`
 
-### Single-Pass FFmpeg Pipeline
-- **Ngày**: 2026-07-26
-- **Chi tiết**: Gộp toàn bộ quá trình cắt clip, zoom video 150%, nạp lớp phụ đề đồ họa, tăng âm lượng 1.3x và hòa trộn `outcard.mp4` ở 2.113s cuối vào **một câu lệnh FFmpeg duy nhất**, đảm bảo tuân thủ `tool-design.md` không ngốn RAM và không rác file tạm.
-- **Files liên quan**: `batch_video_cutter/core/engine.py`
+### Top Caption Single White Badge & Giới hạn 8 - 12 Từ (Style 4)
+- **Ngày**: 2026-07-27
+- **Chi tiết**: Style 4 dùng Canvas 3:4 (1080x1440) kèm Single White Badge bo góc (`radius=18`), lề 40px hai bên (max text width 936px), font Arial Bold 40pt. Số từ Top Caption được đảm bảo nghiêm ngặt từ **8 đến 12 từ** (`min 8, max 12 words`). Nếu tiêu đề ngắn (<8 từ), hệ thống dùng vòng lặp tự động lấy từ nối tiếp từ transcript hoặc viral fillers để mở rộng đủ 8 từ.
+- **Files liên quan**: `batch_video_cutter/utils/graphic_subtitle.py`, `batch_video_cutter/styles/style_4.py`
+
+### Single-Pass FFmpeg Pipeline & Đóng Gói Thành Phẩm
+- **Ngày**: 2026-07-27
+- **Chi tiết**: Gộp toàn bộ quá trình cắt clip, zoom video 150% (không mất cằm/đầu), nạp lớp phụ đề đồ họa, tăng âm 1.3x và hòa trộn `outcard.mp4` vào một câu lệnh FFmpeg duy nhất. Đóng gói clip thành phẩm vào thư mục phiên làm việc `final_clips/batch_export_YYYYMMDD_HHMMSS/` với tên clip chuẩn dạng `{folder_name}.{clip_idx}.mp4` (Ví dụ: `25.1.mp4`, `25.2.mp4`) giống 100% Phong cách 1 & 2.
+- **Files liên quan**: `batch_video_cutter/core/engine.py`, `batch_video_cutter/pipeline.py`
 
 ---
 
 ## Bugs & Solutions
 
-### Monochrome Emoji trong Libass Subtitle
-- **Ngày**: 2026-07-26
-- **Vấn đề**: Bộ render phụ đề ASS (`libass`) trong FFmpeg trên Windows biến font emoji màu (`Noto Color Emoji`) thành nét vẽ đơn sắc đen trắng.
-- **Root cause**: `libass` trên Windows mặc định strip các lớp màu của font emoji.
-- **Fix**: Sử dụng Pillow dán ảnh HD 3D Color PNG (`65x65px`) trực tiếp lên bức ảnh phụ đề đồ họa trong suốt.
+### Anti-Flicker & Trám Khoảng Lặng Trống Phụ Đề
+- **Ngày**: 2026-07-27
+- **Vấn đề**: Phụ đề bị chớp tắt liên tục quá nhanh khi nhân vật nói lướt hoặc giữa cáctừ thoại có khoảng lặng nhỏ.
+- **Root cause**: Mốc thời gian hiển thị từng ảnh ngắn 100ms và có khoảng trống đen không có overlay giữa các từ.
+- **Fix**: Áp dụng `Anti-Flicker Seamless Subtitle Engine`: Đảm bảo mốc hiển thị tối thiểu 0.35s cho mỗi ảnh và trám kín khoảng lặng trống (<0.50s) kéo dài sát mốc bắt đầu của ảnh kế tiếp (`next_start - 0.01s`), giúp phụ đề hiển thị êm ái 100% không chớp nháy.
 - **Files liên quan**: `batch_video_cutter/utils/graphic_subtitle.py`
 
-### Màn hình bị Tím Lịm (Magenta Tint) khi dùng FFmpeg `blend` Filter
-- **Ngày**: 2026-07-26
-- **Vấn đề**: Toàn bộ màn hình video bị biến thành màu hồng/tím lịm khi hòa trộn `outcard.mp4`.
-- **Root cause**: Bộ lọc `blend=all_mode=screen` của FFmpeg đi kèm `enable='gte(t,...)'` làm biến đổi không gian màu YUV Chroma ($U, V$ bị đẩy lên 255).
-- **Fix**: Thay thế bộ lọc `blend` bằng bộ lọc `colorkey=black:0.15:0.1` kết hợp `overlay`. Bộ lọc `colorkey` biến nền đen của outcard thành trong suốt mà **không can thiệp vào kênh màu YUV của video gốc**, giữ nguyên 100% màu sắc tự nhiên.
-- **Files liên quan**: `batch_video_cutter/core/engine.py`
+### Chữ Bị Tràn Hoặc Bị Cắt Ở Các Góc Bo Tròn
+- **Ngày**: 2026-07-27
+- **Vấn đề**: Chữ ở dòng 1 sát góc bo tròn của White Badge bị mất ký tự đầu/cuối (ví dụ chữ W, D).
+- **Root cause**: Ngắt dòng theo số ký tự cố định không tính đến độ rộng pixel thực tế của chữ và padding trong badge.
+- **Fix**: Ngắt dòng theo độ rộng pixel thực tế `font.getbbox()` kết hợp `max_text_w = 936px` và padding `pad_w = 32px`, đảm bảo chữ luôn thụt lề 40px và nằm an toàn tuyệt đối bên trong badge bo góc.
+- **Files liên quan**: `batch_video_cutter/utils/graphic_subtitle.py`
 
 ---
 
 ## How-To
 
-### Quy trình tạo Phụ đề Đồ họa & Hòa trộn Outcard
-- **Ngày**: 2026-07-26
+### Quy trình Đóng gói Clip Thành phẩm & Tên Video Output
+- **Ngày**: 2026-07-27
 - **Bước thực hiện**:
-  1. `generate_graphic_subtitles()` trong `graphic_subtitle.py` render từng mốc thoại thành ảnh PNG trong suốt lưu tại `g_subs_tmp/`.
-  2. `cut_and_render_clip()` xây dựng lệnh FFmpeg nạp danh sách ảnh phụ đề và file `outcard.mp4`.
-  3. Áp dụng filter âm lượng `[0:a]volume=eval=frame:volume='if(gte(t,outcard_start),0,1.30)'[a_main_vol]` để tăng âm 1.3x và tắt thoại gốc về 0 khi outcard chạy.
-  4. Sử dụng `colorkey=black:0.15:0.1` tách nền đen outcard và đè overlay lên video ở 2.113s cuối.
-- **Files liên quan**: `batch_video_cutter/utils/graphic_subtitle.py`, `batch_video_cutter/core/engine.py`
+  1. `pipeline.py` xác định `self.bundle_dir = base_dir / folder_name` (Ví dụ: `batch_export_20260727_014900/`).
+  2. Định dạng tên file clip: `clip_filename = f"{video_info.folder_name}.{clip_idx}.mp4"` (Ví dụ: `25.1.mp4`, `25.2.mp4`).
+  3. Ghi tổng hợp tiêu đề trích dẫn vào file `all_clip_titles.txt` nằm trực tiếp trong folder đóng gói.
+- **Files liên quan**: `batch_video_cutter/pipeline.py`
 
 ---
 
 ## Patterns
 
-### Đo đạc độ rộng chữ chính xác bằng Pillow
-- **Ngày**: 2026-07-26
-- **Chi tiết**: Dùng `font.getbbox(text)` từ font TTF (`Impact.ttf` / `Montserrat-Bold.ttf`) để đo chính xác chiều rộng pixel dòng chữ chứa dấu chấm `.`, sau đó dán ảnh emoji tại `x = last_line_end_x + 8` sát ngay sau dấu chấm `.`.
-- **Ví dụ code**:
-  ```python
-  bbox = font.getbbox(text)
-  text_width = bbox[2] - bbox[0]
-  emoji_x = min(canvas_size[0] - 70, last_line_end_x + 8)
-  img.paste(emoji_img, (emoji_x, emoji_y), emoji_img)
-  ```
+### Đo đạc độ rộng chữ pixel width thực tế trong Pillow
+- **Ngày**: 2026-07-27
+- **Chi tiết**: Sử dụng `font.getbbox(test_string)[2]` để đo độ rộng pixel chính xác của chuỗi chữ trước khi quyết định ngắt dòng, giúp từ tự động lấp đầy Line 1 trước khi đẩy sang Line 2.
 - **Files liên quan**: `batch_video_cutter/utils/graphic_subtitle.py`
-
-### Tắt âm thoại gốc & Trộn âm thanh Outcard
-- **Ngày**: 2026-07-26
-- **Chi tiết**: Dùng `adelay=delays={start_ms}:all=1` làm trễ luồng âm thanh outcard và dùng `amix=inputs=2:duration=first` để phát âm thanh outcard đúng mốc thời gian.
-- **Files liên quan**: `batch_video_cutter/core/engine.py`
