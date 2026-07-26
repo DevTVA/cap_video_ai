@@ -181,16 +181,18 @@ class PipelineOrchestrator:
                             )
                         )
 
-                        # Nếu phong cách có Top Caption Area (như Style 3), tạo PNG Top Caption Badge Nền Trắng Chữ Đen giống mẫu ảnh
+                        # Nếu phong cách có Top Caption Area (như Style 3), tạo PNG Top Caption Dải Nền Vàng Chữ Đen Ngoặc Kép
                         title_text = seg.title_en or seg.title_vi
                         if title_text and getattr(style, "get_caption_area", lambda: None)():
                             from batch_video_cutter.utils.graphic_subtitle import generate_top_caption_layer
                             top_cap_png = Path(tmp_dir) / f"top_caption_{clip_idx}.png"
+                            canvas_res = style.get_output_resolution()
+                            top_area_h = 180 if canvas_res[1] == 1080 else 280
                             cap_png_path = generate_top_caption_layer(
                                 title_text,
                                 output_png=top_cap_png,
-                                canvas_size=style.get_output_resolution(),
-                                top_area_height=280
+                                canvas_size=canvas_res,
+                                top_area_height=top_area_h
                             )
                             if cap_png_path and cap_png_path.exists():
                                 clip_dur = seg.end_time - seg.start_time

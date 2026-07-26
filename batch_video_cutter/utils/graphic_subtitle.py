@@ -345,17 +345,19 @@ def generate_top_caption_layer(
     if not title_text:
         return None
     clean_t = clean_caption_text(title_text)
+    clean_t = clean_t.replace('"', '').strip()
     words = clean_t.split()
     if len(words) > 9:
         clean_t = " ".join(words[:9])
 
+    formatted = f'"{clean_t}"'
     import textwrap
-    lines = textwrap.wrap(clean_t, width=24)[:3]
+    lines = textwrap.wrap(formatted, width=28)[:2]
     if not lines:
         return None
 
     font_path = "C:/Windows/Fonts/arialbd.ttf"
-    font_size = 44
+    font_size = 42
     try:
         font = ImageFont.truetype(font_path, font_size)
     except Exception:
@@ -367,41 +369,32 @@ def generate_top_caption_layer(
     img = Image.new("RGBA", canvas_size, (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
 
+    # 1. Vẽ dải NỀN VÀNG TƯƠI (Bright Yellow #FFFF00) dải trên cùng chuẩn mẫu phong cách 3.mp4 gốc
+    draw.rectangle([0, 0, canvas_size[0], top_area_height], fill=(255, 255, 0, 255))
+
+    # 2. Căn giữa các dòng Chữ Đen Trong Ngoặc Kép "..."
     line_boxes = []
-    max_line_w = 0
     total_text_h = 0
     for line in lines:
         bbox = font.getbbox(line)
         w = bbox[2] - bbox[0]
         h = bbox[3] - bbox[1]
         line_boxes.append((line, w, h))
-        max_line_w = max(max_line_w, w)
-        total_text_h += h + 12
+        total_text_h += h + 8
 
-    total_text_h -= 12
+    total_text_h -= 8
 
-    pad_h = 16
-    pad_w = 32
-    badge_w = max_line_w + pad_w * 2
-    badge_h = total_text_h + pad_h * 2
+    start_y = max(10, (top_area_height - total_text_h) // 2)
 
-    # Căn giữa dọc 100% trong dải 280px nền đen phía trên (giống 100% Ảnh 3 mẫu)
-    badge_x1 = (canvas_size[0] - badge_w) // 2
-    badge_y1 = max(10, (top_area_height - badge_h) // 2)
-    badge_x2 = badge_x1 + badge_w
-    badge_y2 = badge_y1 + badge_h
-
-    # Vẽ 1 BADGE NỀN TRẮNG BO GÓC DUY NHẤT BAO BỌC TOÀN BỘ CÁC DÒNG CHỮ (Giống 100% Ảnh 3)
-    draw.rounded_rectangle([badge_x1, badge_y1, badge_x2, badge_y2], radius=16, fill=(255, 255, 255, 255))
-
-    # Vẽ các dòng Chữ Đen Viết Hoa ở giữa Badge
-    curr_y = badge_y1 + pad_h
+    curr_y = start_y
     for line, w, h in line_boxes:
         text_x = (canvas_size[0] - w) // 2
         draw.text((text_x, curr_y), line, font=font, fill=(0, 0, 0, 255))
-        curr_y += h + 12
+        curr_y += h + 8
 
     output_png.parent.mkdir(parents=True, exist_ok=True)
     img.save(output_png, "PNG")
+    logger.info(f"Đã tạo PNG Top Caption Dải Nền Vàng Chữ Đen Ngoặc Kép (Mẫu phong cách 3.mp4): {output_png}")
+    return output_png
     logger.info(f"Đã tạo PNG Top Caption Badge Nền Trắng Chữ Đen: {output_png}")
     return output_png

@@ -1,7 +1,7 @@
-"""Style 3: Layout 3 vùng chuẩn mẫu ảnh 100% (Canvas 3:4 1080x1440):
-- Top Caption: Badge Nền Trắng Bo Góc + Chữ Đen Viết Hoa 100%, KHÔNG EMOJI (loại bỏ 100% ô vuông), căn giữa dọc 100% trong dải 280px nền đen phía trên.
-- Video Stream: Zoom 150% CapCut style căn giữa dọc ở trung tâm canvas 3:4.
-- Graphic Subtitles: Font Impact 100pt (tương đương cỡ 15 CapCut), Active Word Highlight Xanh Lá, lề dưới 160px thoáng đẹp.
+"""Style 3: Chuẩn 100% theo mẫu phong cách 3.mp4 gốc (Canvas 1:1 1080x1080):
+- Top Caption: Dải Nền Vàng Tươi (Bright Yellow #FFFF00, 180px), Chữ Đen Viết Hoa Trong Ngoặc Kép "...", Căn giữa dọc 100%.
+- Video Stream: Canvas 1:1 (1080x1080), Video zoom 150% CapCut style đặt từ y=180px đến y=1080px.
+- Graphic Subtitles: Font Impact CapCut (85pt), Active Word Highlight MÀU ĐỎ ("red"), lề dưới 150px thoáng đẹp.
 """
 
 from typing import Optional, Tuple
@@ -9,25 +9,25 @@ from .base import BaseStyle, CaptionArea
 
 
 class Style3(BaseStyle):
-    """Phong cách 3: Canvas 3:4 Nền Đen + Top Caption Badge Nền Trắng Chữ Đen + Phụ đề CapCut 100pt."""
+    """Phong cách 3: Canvas 1:1 Dải Nền Vàng Tiêu Đề Chữ Đen Trong Ngoặc Kép + Highlight Màu Đỏ (Chuẩn phong cách 3.mp4)."""
 
-    CAPTION_HEIGHT_RATIO = 0.1944  # 280px / 1440px
+    CAPTION_HEIGHT_RATIO = 0.1667  # 180px / 1080px
 
     @property
     def name(self) -> str:
-        return "Style 3 - 3:4 Black Background + Top White Badge Black Text Caption (No Emoji)"
+        return "Style 3 - 1:1 Yellow Banner Black Quote Title + Red Highlight Subtitle (Mẫu phong cách 3.mp4)"
 
     @property
     def aspect_ratio(self) -> str:
-        return "3:4"
+        return "1:1"
 
     def get_output_resolution(self) -> Tuple[int, int]:
-        """Output 1080x1440 (3:4)."""
-        return (1080, 1440)
+        """Output 1080x1080 (1:1)."""
+        return (1080, 1080)
 
     def get_caption_area(self) -> Optional[CaptionArea]:
         out_w, out_h = self.get_output_resolution()
-        caption_h = 280
+        caption_h = 180
         return CaptionArea(
             x=0,
             y=0,
@@ -43,25 +43,24 @@ class Style3(BaseStyle):
         subtitle_path: Optional[str] = None,
         title_text: Optional[str] = None,
     ) -> Tuple[str, str]:
-        out_w, out_h = self.get_output_resolution()  # 1080x1440
+        out_w, out_h = self.get_output_resolution()  # 1080x1080
+        caption_h = 180  # Vùng dải nền vàng phía trên (180px)
+        video_area_h = 900  # Vùng video phía dưới (900px)
 
         if input_width <= 0 or input_height <= 0:
             input_width, input_height = 1920, 1080
 
-        # Phóng đại 150% CapCut zoom chuẩn 100% theo Phong cách 1 & 2
-        fit_w = out_w
-        fit_h = int(input_height * (out_w / input_width))
+        # Scale 150% CapCut zoom chuẩn 100% theo Phong cách 1 & 2
+        scale_factor = max((out_w * 1.5) / input_width, (video_area_h * 1.5) / input_height)
+        fg_w = int(input_width * scale_factor)
+        fg_h = int(input_height * scale_factor)
 
-        fg_w = int(fit_w * 1.5)
-        fg_h = int(fit_h * 1.5)
-
-        overlay_x = (out_w - fg_w) // 2
-        overlay_y = (out_h - fg_h) // 2  # Căn giữa dọc video ở trung tâm canvas 3:4
+        crop_x = (fg_w - out_w) // 2
+        crop_y = (fg_h - video_area_h) // 2
 
         filters = [
-            f"color=c=black:s={out_w}x{out_h}:r=30[canvas]",
-            f"[0:v]scale={fg_w}:{fg_h}[fg_scaled]",
-            f"[canvas][fg_scaled]overlay={overlay_x}:{overlay_y}:shortest=1[styled]",
+            f"[0:v]scale={fg_w}:{fg_h},crop={out_w}:{video_area_h}:{crop_x}:{crop_y},"
+            f"pad={out_w}:{out_h}:0:{caption_h}:black[styled]"
         ]
         output_label = "[styled]"
 
@@ -77,12 +76,12 @@ class Style3(BaseStyle):
         return "bottom"
 
     def get_highlight_color(self) -> str:
-        """Màu Highlight Phong cách 1 ("green")."""
-        return "green"
+        """Màu Highlight MÀU ĐỎ ("red") chuẩn 100% theo mẫu phong cách 3.mp4."""
+        return "red"
 
     def get_font_size(self) -> int:
-        """Cỡ font 100pt chuẩn tương đương cỡ 15 trong CapCut."""
-        return 100
+        """Cỡ font 85pt chuẩn CapCut."""
+        return 85
 
     def get_italic_option(self) -> bool:
         return False
