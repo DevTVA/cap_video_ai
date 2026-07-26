@@ -122,26 +122,10 @@ def generate_graphic_subtitles(
 
         if not words_list:
             continue
-        # Thuật toán phụ đề chuẩn 100% theo video mẫu phong cách 4.mp4 (Gộp 2-3 từ ngắn, chia 2 dòng ngắn căn giữa):
-        chunks = []
-        curr_chunk = []
-        for i, word_info in enumerate(words_list):
-            w_text, w_start, w_end = word_info
-            curr_chunk.append(word_info)
 
-            # 1. KHÔNG ngắt theo dấu câu/từ viết tắt. Ngắt khi khoảng lặng âm thanh giữa 2 từ > 0.35s
-            has_large_pause = False
-            if i < len(words_list) - 1:
-                next_start = words_list[i + 1][1]
-                if next_start - w_end > 0.35:
-                    has_large_pause = True
-
-            # 2. Ngắt khi cụm đạt 3 từ ngắn (chuẩn 100% theo mẫu phong cách 4.mp4)
-            reached_max_words = len(curr_chunk) >= 3
-
-            if has_large_pause or reached_max_words or i == len(words_list) - 1:
-                chunks.append(curr_chunk)
-                curr_chunk = []
+        # Cụm 4 từ chuẩn 100% phiên commit 1:
+        chunk_size = 4
+        chunks = [words_list[i:i + chunk_size] for i in range(0, len(words_list), chunk_size)]
 
         for chunk_idx, chunk in enumerate(chunks):
             if not chunk:
@@ -166,31 +150,16 @@ def generate_graphic_subtitles(
                             logger.warning(f"Không thể nạp ảnh emoji {emoji_png_path}: {e}")
                             emoji_img = None
 
-            # Đo độ rộng cả chunk để quyết định hiển thị 1 DÒNG ĐƠN hay 2 dòng
-            chunk_full_text = " ".join(w[0].upper().strip() for w in chunk)
-            chunk_bbox = font.getbbox(chunk_full_text)
-            chunk_w = chunk_bbox[2] - chunk_bbox[0]
+            # Chia chunk làm 2 dòng nếu có từ 3 từ trở lên (bản commit 1 chuẩn)
+            mid_point = len(chunk) // 2 if len(chunk) >= 3 else len(chunk)
+            line1_words = chunk[:mid_point]
+            line2_words = chunk[mid_point:]
 
-            # Ưu tiên 1 DÒNG ĐƠN nếu tổng độ rộng <= 750px hoặc <= 3 từ (tránh nhấp nháy 2 dòng khi nói nhanh)
-            if chunk_w <= 750 or len(chunk) <= 3:
-                line1_words = chunk
-                line2_words = []
-            else:
-                mid_point = len(chunk) // 2
-                line1_words = chunk[:mid_point]
-                line2_words = chunk[mid_point:]
-
-            # Render từng mốc thoại trong chunk theo nhịp nói thực tế
+            # Render từng mốc thoại trong chunk
             for active_idx, active_word_info in enumerate(chunk):
                 w_word, w_start, w_end = active_word_info
                 if w_start >= w_end:
                     continue
-
-                # Mốc thời lượng hiển thị khớp từ w_start đến từ kế tiếp (hoặc cuối chunk)
-                if active_idx < len(chunk) - 1:
-                    frame_end = max(w_end, chunk[active_idx + 1][1] - 0.01)
-                else:
-                    frame_end = max(w_end, chunk[-1][2])
 
                 active_rgba = dynamic_rgbas[color_counter % len(dynamic_rgbas)]
                 color_counter += 1
@@ -214,7 +183,7 @@ def generate_graphic_subtitles(
 
                 eff_margin_v = 160 if canvas_size[1] > 1080 else margin_v
                 if position == "top":
-                    base_y = 45  # Đặt vừa vặn trong dải caption phía trên
+                    base_y = 45
                 else:
                     base_y = canvas_size[1] - eff_margin_v - font_size * (2 if l2_text else 1) - 20
 
@@ -239,7 +208,7 @@ def generate_graphic_subtitles(
                             stroke_width=8,
                             stroke_fill=(0, 0, 0, 200),
                         )
-                        # Text chính (Kỹ thuật 2-Pass Stroke: Pass 1 viền đen mập 8px, Pass 2 ruột đặc 100%)
+                        # Text chính (Kỹ thuật 2-Pass Stroke bản commit 1: Pass 1 viền đen mập 8px, Pass 2 ruột đặc 100%)
                         text_draw.text(
                             (x_cursor, y1),
                             clean_w,
@@ -279,7 +248,7 @@ def generate_graphic_subtitles(
                             stroke_width=8,
                             stroke_fill=(0, 0, 0, 200),
                         )
-                        # Text chính (Kỹ thuật 2-Pass Stroke: Pass 1 viền đen mập 8px, Pass 2 ruột đặc 100%)
+                        # Text chính (Kỹ thuật 2-Pass Stroke bản commit 1: Pass 1 viền đen mập 8px, Pass 2 ruột đặc 100%)
                         text_draw.text(
                             (x_cursor, y2),
                             clean_w,
@@ -298,7 +267,7 @@ def generate_graphic_subtitles(
                         w_box = font.getbbox(clean_w + " ")
                         x_cursor += (w_box[2] - w_box[0])
 
-                # Dán HD Color Emoji 3D ngay sát dấu chấm `.`
+                # Dán HD Color Emoji 3D ngay sát bên phải dấu chấm `.`
                 if emoji_img:
                     emoji_x = min(canvas_size[0] - 70, last_line_end_x + 8)
                     emoji_y = int(last_line_y + 10)
@@ -307,14 +276,14 @@ def generate_graphic_subtitles(
                 # Làm mờ mịn lớp bóng đổ Soft Drop Shadow
                 shadow_img = shadow_img.filter(ImageFilter.GaussianBlur(3))
 
-                # Gộp Lớp Bóng Đổ + Lớp Chữ Chính (Font Impact CapCut bản first commit)
+                # Gộp Lớp Bóng Đổ + Lớp Chữ Chính (Font Impact CapCut bản commit 1)
                 composite = Image.alpha_composite(shadow_img, text_img)
 
                 # Lưu file PNG
                 frame_count += 1
                 out_png_path = tmp_dir / f"g_sub_{frame_count:04d}.png"
                 composite.save(out_png_path, "PNG")
-                graphic_results.append((out_png_path, w_start, frame_end))
+                graphic_results.append((out_png_path, w_start, w_end))
 
     # Khử chớp nháy 100% (Anti-Flicker Seamless Subtitle Engine)
     if graphic_results:
