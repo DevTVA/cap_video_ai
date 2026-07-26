@@ -44,11 +44,14 @@ class PipelineOrchestrator:
         # Thư mục Output gốc (ví dụ: C:\Users\Admin\Desktop\output\final_clips)
         base_dir = config.output_dir if config.output_dir else (config.input_dir / "final_clips")
 
+        # Đóng gói video thành phẩm theo folder phiên làm việc chuẩn 100% giống Phong cách 1 & 2
         if config.session_folder_name:
             folder_name = config.session_folder_name.replace("/", "_").replace("\\", "_")
-            self.bundle_dir = base_dir / folder_name
         else:
-            self.bundle_dir = base_dir
+            now = datetime.datetime.now()
+            folder_name = f"batch_export_{now.strftime('%Y%m%d_%H%M%S')}"
+
+        self.bundle_dir = base_dir / folder_name
         self.bundle_dir.mkdir(parents=True, exist_ok=True)
 
 
@@ -150,8 +153,8 @@ class PipelineOrchestrator:
                 video_results = []
                 # 4. Render từng clip
                 for clip_idx, seg in enumerate(segments, 1):
-                    # Tên video sạch sẽ, ngắn gọn: 25_1.mp4, 25_2.mp4, 25_3.mp4
-                    clip_filename = f"{video_info.folder_name}_{clip_idx}.mp4"
+                    # Tên video chuẩn dạng giống Phong cách 1 & 2: 25_Rx5cU2WZK1o_1.mp4
+                    clip_filename = f"{video_info.folder_name}_{video_info.video_id}_{clip_idx}.mp4"
                     output_clip_path = self.bundle_dir / clip_filename
 
 

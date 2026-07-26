@@ -402,9 +402,9 @@ def generate_top_caption_layer(
 
     # 2. Nếu là Canvas 3:4 (1080x1440): Render SINGLE WHITE BADGE BO GÓC GIÃN ĐẾN LỀ 40PX TRƯỚC KHU XUỐNG DÒNG MỚI (Style 4)
     else:
-        # Giới hạn tối đa từ 8 đến 11 từ
-        if len(words) > 11:
-            words = words[:11]
+        # Giới hạn số từ Top Caption: Tối thiểu 8 từ, tối đa 12 từ
+        if len(words) > 12:
+            words = words[:12]
 
         font_size = 40
         try:
