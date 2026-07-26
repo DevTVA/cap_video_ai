@@ -276,5 +276,18 @@ def generate_graphic_subtitles(
                 composite.save(out_png_path, "PNG")
                 graphic_results.append((out_png_path, w_start, w_end))
 
+    # Khử đè thời gian giữa các khung phụ đề (Timing overlap sanitization 100% chống đè chữ)
+    if graphic_results:
+        graphic_results.sort(key=lambda x: x[1])
+        sanitized = []
+        for i in range(len(graphic_results)):
+            p, s, e = graphic_results[i]
+            if i < len(graphic_results) - 1:
+                next_s = graphic_results[i + 1][1]
+                e = min(e, next_s - 0.02)
+            if e > s + 0.01:
+                sanitized.append((p, s, e))
+        graphic_results = sanitized
+
     logger.info(f"Đã tạo {len(graphic_results)} khung ảnh phụ đề đồ họa Impact CapCut (bản first commit) tại {tmp_dir}")
     return graphic_results

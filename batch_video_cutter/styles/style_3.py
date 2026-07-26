@@ -1,12 +1,23 @@
-"""Style 3: Scale 150% CapCut-style, tỷ lệ 3:4 (1080x1440), nền đen, phần trên hiển thị Caption Title.
+"""Style 3: Scale 150% CapCut-style, tỷ lệ 3:4 (1080x1440), nền đen, phần trên hiển thị Top Caption Title.
 
 Video gốc được scale 150% và đặt phía dưới canvas 3:4 (1080x1440).
-Phần trên (khoảng 20% canvas = 288px) có nền đen để hiển thị Caption Title rực rỡ.
-Phụ đề được đặt ở phía dưới màn hình (bottom) vô cùng thoáng đẹp.
+Phần trên (khoảng 20% canvas = 288px) có nền đen để hiển thị Caption Title rực rỡ (tự động xuống dòng 2-3 dòng không bao giờ tràn khung).
+Phụ đề được đặt ở phía dưới màn hình (bottom) vô cùng thoáng đẹp, không bị đè nhau.
 """
 
+import textwrap
 from typing import Optional, Tuple
 from .base import BaseStyle, CaptionArea
+
+
+def format_top_caption_title(title_text: str, max_width: int = 24) -> str:
+    """Tự động chia tiêu đề thành nhiều dòng ngắn (tối đa 24 ký tự/dòng) tránh tràn khung hình 1080px."""
+    if not title_text:
+        return ""
+    clean_t = title_text.strip()
+    lines = textwrap.wrap(clean_t, width=max_width)
+    lines = lines[:3]  # Giới hạn tối đa 3 dòng
+    return "\n".join(lines)
 
 
 class Style3(BaseStyle):
@@ -48,10 +59,10 @@ class Style3(BaseStyle):
         caption_h = int(out_h * self.CAPTION_HEIGHT_RATIO)  # 288px
         video_area_h = out_h - caption_h  # 1152px
 
-        # Đảm bảo kích thước scaled sau 1.5x zoom LUÔN LUÔN lớn hơn hoặc bằng (out_w, video_area_h) cho MỌI resolution video (16:9, 9:16, v.v.)
         if input_width <= 0 or input_height <= 0:
             input_width, input_height = 1920, 1080
 
+        # Đảm bảo scale_factor luôn lớn hơn hoặc bằng target crop cho MỌI resolution video (16:9, 9:16, 1:1, v.v.)
         scale_factor = max((out_w * 1.5) / input_width, (video_area_h * 1.5) / input_height)
         fg_w = int(input_width * scale_factor)
         fg_h = int(input_height * scale_factor)
@@ -59,26 +70,27 @@ class Style3(BaseStyle):
         crop_x = (fg_w - out_w) // 2
         crop_y = (fg_h - video_area_h) // 2
 
-        # Cắt xén video đúng 1080x1152 trước khi pad 1080x1440 (đảm bảo 100% không bao giờ bị lỗi crop size)
         filters = [
             f"[0:v]scale={fg_w}:{fg_h},crop={out_w}:{video_area_h}:{crop_x}:{crop_y},"
             f"pad={out_w}:{out_h}:0:{caption_h}:black[styled]"
         ]
         output_label = "[styled]"
 
-        # Render Top Caption Title màu Vàng rực rỡ ở vùng nền đen trên cùng
+        # Render Top Caption Title màu Vàng rực rỡ ở vùng nền đen trên cùng (Tự động xuống dòng chuẩn 100%)
         if title_text:
+            formatted_title = format_top_caption_title(title_text, max_width=24)
             safe_title = (
-                title_text.replace("'", "")
+                formatted_title.replace("'", "")
                 .replace(":", "\\:")
                 .replace("%", "\\%")
                 .replace("[", "\\[")
                 .replace("]", "\\]")
             )
             font_path = "C\\:/Windows/Fonts/impact.ttf"
+            # Cân chỉnh y=75 và line_spacing=12 cho 2-3 dòng tiêu đề vừa vặn trong dải 288px nền đen
             filters.append(
                 f"[styled]drawtext=fontfile='{font_path}':text='{safe_title}':fontcolor=yellow:"
-                f"fontsize=52:x=(w-text_w)/2:y=110:shadowcolor=black:shadowx=3:shadowy=3[styled_title]"
+                f"fontsize=46:line_spacing=12:x=(w-text_w)/2:y=75:shadowcolor=black:shadowx=3:shadowy=3[styled_title]"
             )
             output_label = "[styled_title]"
 
