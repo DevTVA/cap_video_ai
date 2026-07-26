@@ -419,7 +419,7 @@ def generate_top_caption_layer(
             curr_y += h + 8
         logger.info(f"Đã tạo PNG Top Caption Dải Nền Vàng (Style 3): {output_png}")
 
-    # 2. Nếu là Canvas 3:4 (1080x1440): Render SINGLE WHITE BADGE BO GÓC GIÃN ĐẾN LỀ 40PX TRƯỚC KHU XUỐNG DÒNG MỚI (Style 4)
+    # 2. Nếu là Canvas 3:4 (1080x1440): Render 2-LINE CONTOUR WHITE BADGE BO VIỀN ÔM THEO TỪNG DÒNG (Style 4)
     else:
         font_size = 40
         try:
@@ -427,72 +427,74 @@ def generate_top_caption_layer(
         except Exception:
             font = ImageFont.load_default()
 
-        # Max text width per line = Canvas 1080 - Margin 80 (40px 2 bên) - Pad 64 (32px 2 bên) = 936px
-        max_text_w = canvas_size[0] - 80 - 64
+        max_text_w = canvas_size[0] - 80 - 64  # 936px
 
-        # Ngắt dòng theo pixel width thực tế của Font (giãn tối đa sát lề 40px mới chịu xuống dòng mới)
-        lines = []
-        curr_words = []
-        for w in words:
-            test_words = curr_words + [w]
-            test_str = " ".join(test_words)
-            if len(lines) == 0:
-                test_str = f'"{test_str}"'
-            
-            bbox = font.getbbox(test_str)
-            w_px = bbox[2] - bbox[0]
-            
-            if w_px <= max_text_w:
-                curr_words.append(w)
-            else:
-                if curr_words:
-                    line_text = " ".join(curr_words)
-                    if len(lines) == 0:
-                        line_text = f'"{line_text}"'
-                    lines.append(line_text)
-                    curr_words = [w]
-                else:
-                    lines.append(w)
-                    curr_words = []
-            if len(lines) >= 3:
-                break
-                
-        if curr_words and len(lines) < 3:
-            line_text = " ".join(curr_words)
-            if len(lines) == 0:
-                line_text = f'"{line_text}"'
-            lines.append(line_text)
+        # Tự động cân đối 8-12 từ thành CHÍNH XÁC 2 DÒNG cân đối
+        mid = len(words) // 2
+        best_split = mid
+        min_diff = float("inf")
 
-        line_boxes = []
-        max_line_w = 0
-        total_text_h = 0
-        for line in lines:
-            bbox = font.getbbox(line)
-            w = bbox[2] - bbox[0]
-            h = bbox[3] - bbox[1]
-            line_boxes.append((line, w, h))
-            max_line_w = max(max_line_w, w)
-            total_text_h += h + 10
-        total_text_h -= 10
+        for i in range(max(1, mid - 2), min(len(words), mid + 3)):
+            l1_str = " ".join(words[:i])
+            l2_str = " ".join(words[i:])
+            w1 = font.getbbox(f'"{l1_str}"')[2] - font.getbbox(f'"{l1_str}"')[0] if i == len(words) else font.getbbox(f'"{l1_str}"')[2] - font.getbbox(f'"{l1_str}"')[0]
+            w2 = font.getbbox(f'{l2_str}"')[2] - font.getbbox(f'{l2_str}"')[0]
+            if w1 <= max_text_w and w2 <= max_text_w:
+                diff = abs(w1 - w2)
+                if diff < min_diff:
+                    min_diff = diff
+                    best_split = i
 
-        pad_h = 16
-        margin_x = 40
-        badge_x1 = margin_x
-        badge_x2 = canvas_size[0] - margin_x  # 1040px (Thụt lề trái 40px và lề phải 40px 100% tuyệt đối)
-        badge_h = total_text_h + pad_h * 2
+        line1_text = f'"{" ".join(words[:best_split])}'
+        line2_text = f'{" ".join(words[best_split:])}"'
 
-        badge_y1 = max(15, (top_area_height - badge_h) // 2)
-        badge_y2 = badge_y1 + badge_h
+        bbox1 = font.getbbox(line1_text)
+        w1, h1 = bbox1[2] - bbox1[0], bbox1[3] - bbox1[1]
 
-        # Vẽ Single White Rounded Rectangle Badge (radius=18)
-        draw.rounded_rectangle([badge_x1, badge_y1, badge_x2, badge_y2], radius=18, fill=(255, 255, 255, 255))
+        bbox2 = font.getbbox(line2_text)
+        w2, h2 = bbox2[2] - bbox2[0], bbox2[3] - bbox2[1]
 
-        curr_y = badge_y1 + pad_h
-        for line, w, h in line_boxes:
-            text_x = (canvas_size[0] - w) // 2
-            draw.text((text_x, curr_y), line, font=font, fill=(0, 0, 0, 255))
-            curr_y += h + 10
-        logger.info(f"Đã tạo PNG Top Caption Single White Badge Pixel Wrap (Style 4): {output_png}")
+        pad_w, pad_h, radius = 32, 16, 18
+
+        box1_w = w1 + pad_w * 2
+        box1_h = h1 + pad_h * 2
+        box1_x1 = (canvas_size[0] - box1_w) // 2
+        box1_x2 = box1_x1 + box1_w
+
+        box2_w = w2 + pad_w * 2
+        box2_h = h2 + pad_h * 2
+        box2_x1 = (canvas_size[0] - box2_w) // 2
+        box2_x2 = box2_x1 + box2_w
+
+        total_h = box1_h + box2_h - 8
+        start_y = max(15, (top_area_height - total_h) // 2)
+
+        box1_y1 = start_y
+        box1_y2 = box1_y1 + box1_h
+
+        box2_y1 = box1_y2 - 8
+        box2_y2 = box2_y1 + box2_h
+
+        # 1. Vẽ Khung Trắng Bo Góc Contour Cho Line 1 & Line 2
+        draw.rounded_rectangle([box1_x1, box1_y1, box1_x2, box1_y2], radius=radius, fill=(255, 255, 255, 255))
+        draw.rounded_rectangle([box2_x1, box2_y1, box2_x2, box2_y2], radius=radius, fill=(255, 255, 255, 255))
+
+        # Fill vùng liền giữa 2 hộp (nếu 1 dòng rộng hơn dòng còn lại)
+        min_x1 = min(box1_x1, box2_x1) + radius
+        max_x2 = max(box1_x2, box2_x2) - radius
+        if max_x2 > min_x1:
+            draw.rectangle([min_x1, box1_y2 - 10, max_x2, box2_y1 + 10], fill=(255, 255, 255, 255))
+
+        # 2. Vẽ Chữ Đen 2 Dòng Căn Giữa
+        text1_x = (canvas_size[0] - w1) // 2
+        text1_y = box1_y1 + pad_h
+        draw.text((text1_x, text1_y), line1_text, font=font, fill=(0, 0, 0, 255))
+
+        text2_x = (canvas_size[0] - w2) // 2
+        text2_y = box2_y1 + pad_h
+        draw.text((text2_x, text2_y), line2_text, font=font, fill=(0, 0, 0, 255))
+
+        logger.info(f"Đã tạo PNG Top Caption 2-Line Contour White Badge (Style 4): {output_png}")
 
     output_png.parent.mkdir(parents=True, exist_ok=True)
     img.save(output_png, "PNG")
