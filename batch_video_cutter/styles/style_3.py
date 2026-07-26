@@ -10,13 +10,16 @@ from typing import Optional, Tuple
 from .base import BaseStyle, CaptionArea
 
 
-def format_top_caption_title(title_text: str, max_width: int = 24) -> str:
-    """Tự động chia tiêu đề thành nhiều dòng ngắn (tối đa 24 ký tự/dòng) tránh tràn khung hình 1080px."""
+def format_top_caption_title(title_text: str, max_words: int = 9, max_width: int = 24) -> str:
+    """Tự động giới hạn tiêu đề Top Caption tối đa 8-10 từ và chia thành các dòng ngắn gọn gàng."""
     if not title_text:
         return ""
     clean_t = title_text.strip()
+    words = clean_t.split()
+    if len(words) > max_words:
+        clean_t = " ".join(words[:max_words])
     lines = textwrap.wrap(clean_t, width=max_width)
-    lines = lines[:3]  # Giới hạn tối đa 3 dòng
+    lines = lines[:3]  # Giới hạn tối đa 3 dòng ngắn
     return "\n".join(lines)
 
 
