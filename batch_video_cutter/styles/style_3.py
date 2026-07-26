@@ -50,10 +50,16 @@ class Style3(BaseStyle):
         if input_width <= 0 or input_height <= 0:
             input_width, input_height = 1920, 1080
 
-        # Scale 150% CapCut zoom chuẩn 100% theo Phong cách 1 & 2
-        scale_factor = max((out_w * 1.5) / input_width, (video_area_h * 1.5) / input_height)
-        fg_w = int(input_width * scale_factor)
-        fg_h = int(input_height * scale_factor)
+        # Công thức Zoom 150% CapCut chuẩn 100% bảo toàn tỷ lệ khung hình gốc (0% méo hình)
+        fit_w = out_w
+        fit_h = int(input_height * (out_w / input_width))
+
+        fg_w = int(fit_w * 1.5)
+        fg_h = int(fit_h * 1.5)
+
+        if fg_h < video_area_h:
+            fg_h = video_area_h
+            fg_w = int(input_width * (fg_h / input_height))
 
         crop_x = (fg_w - out_w) // 2
         crop_y = (fg_h - video_area_h) // 2

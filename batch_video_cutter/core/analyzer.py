@@ -222,8 +222,10 @@ def analyze_transcript(
     api_key: Optional[str] = None,
     prompt_template: Optional[str] = None,
     video_duration: float = 0.0,
+    intro_offset: float = 0.0,
+    outro_offset: float = 0.0,
 ) -> List[ViralSegment]:
-    """Phân tích transcript để tìm viral segments bằng Gemini API.
+    """Phân tích transcript để tìm viral segments bằng Gemini/Groq/OpenRouter API.
 
     Args:
         transcript_text: Text transcript có timestamp.
@@ -231,6 +233,8 @@ def analyze_transcript(
         api_key: API key cho Gemini.
         prompt_template: Prompt template tùy chỉnh.
         video_duration: Thời lượng video (giây), dùng để validate.
+        intro_offset: Bỏ số giây đầu (10s cho Style 1 & 2).
+        outro_offset: Bỏ số giây cuối (25s cho Style 1 & 2).
 
     Returns:
         Danh sách ViralSegment.
@@ -258,16 +262,16 @@ def analyze_transcript(
             transcript=transcript_text,
         )
 
-    logger.info(f"Gửi transcript tới Gemini API ({len(transcript_text)} chars)...")
+    logger.info(f"Gửi transcript tới LLM API ({len(transcript_text)} chars)...")
 
-    # Gọi Gemini API
+    # Gọi LLM API
     max_attempts = 3
     last_error = ""
 
     for attempt in range(1, max_attempts + 1):
         try:
             response_text = _call_gemini_api(full_prompt, api_key)
-            logger.debug(f"Gemini response (attempt {attempt}):\n{response_text[:500]}")
+            logger.debug(f"LLM response (attempt {attempt}):\n{response_text[:500]}")
 
             # Thử parse JSON trước
             raw_segments = _parse_llm_response_json(response_text)
@@ -289,9 +293,9 @@ def analyze_transcript(
                 )
                 continue
 
-            # Convert raw segments thành ViralSegment
+            # Convert raw segments thành ViralSegment với validation
             segments = _convert_raw_segments(
-                raw_segments, max_clips, video_duration
+                raw_segments, max_clips, video_duration, intro_offset, outro_offset
             )
 
             if segments:
@@ -317,6 +321,49 @@ import os
 import json
 import urllib.request
 import urllib.error
+
+def _call_openrouter_api(prompt: str, openrouter_api_key: str) -> str:
+    """Gọi OpenRouter.ai API miễn phí làm dự phòng cao cấp. Hỗ trợ luân phiên chuỗi nhiều API key."""
+    url = "https://openrouter.ai/api/v1/chat/completions"
+    keys = [k.strip() for k in openrouter_api_key.split(",") if k.strip()]
+    if not keys:
+        raise ValueError("Danh sách OpenRouter API Key rỗng!")
+
+    models_to_try = [
+        "inclusionai/ling-3.0-flash:free",
+        "google/gemma-4-31b-it:free",
+        "nvidia/nemotron-nano-9b-v2:free",
+        "openai/gpt-oss-20b:free",
+    ]
+    last_exc = None
+    for idx, key in enumerate(keys, 1):
+        headers = {
+            "Authorization": f"Bearer {key}",
+            "Content-Type": "application/json",
+            "HTTP-Referer": "https://github.com/AI-Agent",
+            "X-Title": "Batch Video Cutter",
+        }
+        for model_name in models_to_try:
+            try:
+                logger.debug(f"Đang thử OpenRouter API key {idx}/{len(keys)} với model '{model_name}'...")
+                data = {
+                    "model": model_name,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "temperature": 0.7,
+                    "max_tokens": 2048,
+                }
+                req = urllib.request.Request(url, data=json.dumps(data).encode("utf-8"), headers=headers)
+                with urllib.request.urlopen(req, timeout=60) as resp:
+                    res_data = json.loads(resp.read().decode("utf-8"))
+                    content = res_data["choices"][0]["message"]["content"]
+                    if content and content.strip():
+                        return content
+            except Exception as e:
+                logger.warning(f"OpenRouter API key {idx}/{len(keys)} model '{model_name}' thất bại: {e}")
+                last_exc = e
+
+    raise RuntimeError(f"Tất cả {len(keys)} OpenRouter API Key đều thất bại: {last_exc}")
+
 
 def _call_groq_api(prompt: str, groq_api_key: str) -> str:
     """Gọi Groq API miễn phí làm dự phòng. Hỗ trợ chuỗi nhiều API key phân cách bởi dấu phẩy."""
@@ -349,27 +396,34 @@ def _call_groq_api(prompt: str, groq_api_key: str) -> str:
             logger.warning(f"Groq API key {idx}/{len(keys)} thất bại: {e}")
             last_exc = e
 
+    # Nếu tất cả Groq keys thất bại, tự động chuyển sang OpenRouter
+    openrouter_key = os.getenv("OPENROUTER_API_KEY", "").strip()
+    if openrouter_key:
+        logger.info("Tất cả Groq keys đã hết/lỗi. Chuyển sang dự phòng OpenRouter API...")
+        return _call_openrouter_api(prompt, openrouter_key)
+
     raise RuntimeError(f"Tất cả {len(keys)} Groq API Key đều thất bại: {last_exc}")
 
 
-
 def _call_gemini_api(prompt: str, api_key: str) -> str:
-    """Gọi Gemini API miễn phí. Hỗ trợ chuỗi nhiều API key, retry và fallback Groq API."""
-    # Kiểm tra nếu người dùng có cài GROQ_API_KEY
+    """Gọi Gemini API miễn phí. Hỗ trợ chuỗi nhiều API key, retry và fallback Groq / OpenRouter API."""
     groq_key = os.getenv("GROQ_API_KEY", "").strip()
+    openrouter_key = os.getenv("OPENROUTER_API_KEY", "").strip()
 
     try:
         import google.generativeai as genai
     except ImportError:
         if groq_key:
             return _call_groq_api(prompt, groq_key)
+        elif openrouter_key:
+            return _call_openrouter_api(prompt, openrouter_key)
         raise RuntimeError(
             "Chưa cài google-generativeai. "
             "Chạy: pip install google-generativeai"
         )
 
     keys = [k.strip() for k in api_key.split(",") if k.strip()]
-    if not keys and not groq_key:
+    if not keys and not groq_key and not openrouter_key:
         raise ValueError("Danh sách API Key rỗng!")
 
     models_to_try = [
@@ -411,18 +465,26 @@ def _call_gemini_api(prompt: str, api_key: str) -> str:
                 else:
                     logger.warning(f"Key {key_idx}/{len(keys)} ({model_name}) gặp lỗi: {e}")
 
-    # Nếu tất cả Gemini key đều hết quota mà có Groq key → dùng Groq
+    # 1. Dự phòng Tầng 2: Groq API
     if groq_key:
         logger.info("Tất cả Gemini keys đã hết quota. Chuyển sang dự phòng Groq API...")
         try:
             return _call_groq_api(prompt, groq_key)
         except Exception as e:
+            logger.warning(f"Groq API dự phòng thất bại: {e}")
+            last_exc = e
+
+    # 2. Dự phòng Tầng 3: OpenRouter API
+    if openrouter_key:
+        logger.info("Chuyển sang dự phòng Tầng 3: OpenRouter API...")
+        try:
+            return _call_openrouter_api(prompt, openrouter_key)
+        except Exception as e:
             last_exc = e
 
     raise RuntimeError(
-        f"Tất cả {len(keys)} API Key Gemini đều hết Hạn ngạch (Quota/Daily limit) trong ngày! "
-        f"Lỗi: {last_exc}\n"
-        f"Gợi ý: Tạo thêm key mới tại https://aistudio.google.com/ hoặc thêm GROQ_API_KEY vào file .env"
+        f"Tất cả API Keys (Gemini / Groq / OpenRouter) đều không khả dụng! "
+        f"Lỗi cuối: {last_exc}"
     )
 
 
@@ -433,6 +495,8 @@ def _convert_raw_segments(
     raw_segments: List[dict],
     max_clips: int,
     video_duration: float,
+    intro_offset: float = 0.0,
+    outro_offset: float = 0.0,
 ) -> List[ViralSegment]:
     """Convert raw dict segments thành ViralSegment với validation.
 
@@ -440,6 +504,8 @@ def _convert_raw_segments(
         raw_segments: Danh sách dict từ LLM response.
         max_clips: Số clip tối đa.
         video_duration: Thời lượng video (giây).
+        intro_offset: Bỏ 10s đầu cho Style 1 & 2.
+        outro_offset: Bỏ 25s cuối cho Style 1 & 2.
 
     Returns:
         Danh sách ViralSegment đã validate.
@@ -454,6 +520,20 @@ def _convert_raw_segments(
 
             start_time = _parse_timecode_to_seconds(start_tc)
             end_time = _parse_timecode_to_seconds(end_tc)
+
+            # 1. Ép giới hạn Bỏ 10s đầu cho Style 1 & 2
+            if intro_offset > 0.0 and start_time < intro_offset:
+                logger.info(f"Segment {i+1}: start_time={start_time:.1f}s thuộc 10s đầu intro, điều chỉnh lên {intro_offset:.1f}s")
+                start_time = intro_offset
+                end_time = start_time + 27.0
+
+            # 2. Ép giới hạn Bỏ 25s cuối cho Style 1 & 2
+            if outro_offset > 0.0 and video_duration > 0.0:
+                max_allowed_end = max(intro_offset + 25.0, video_duration - outro_offset)
+                if end_time > max_allowed_end:
+                    logger.info(f"Segment {i+1}: end_time={end_time:.1f}s thuộc 25s cuối outro, điều chỉnh về {max_allowed_end:.1f}s")
+                    end_time = max_allowed_end
+                    start_time = max(intro_offset, end_time - 27.0)
 
             # Validate
             if end_time <= start_time:

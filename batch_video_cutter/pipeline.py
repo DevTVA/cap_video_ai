@@ -9,6 +9,7 @@ import asyncio
 import datetime
 import functools
 import json
+import re
 import tempfile
 from pathlib import Path
 from typing import List, Dict, Optional
@@ -129,8 +130,22 @@ class PipelineOrchestrator:
                     progress_bar.update(1)
                     return
 
-                # 2. Phân tích viral segments qua LLM API
-                transcript_text = format_transcript_for_llm(transcript)
+                # 2. Xác định phong cách render theo folder index để cấu hình mốc Intro/Outro
+                style = resolve_style_for_folder(video_info.folder_index, self.style_mapping)
+                logger.info(f"Sử dụng {style.name} cho folder [{video_info.folder_name}]")
+
+                # Phong cách 1 & 2: Bỏ 10s đầu (intro) và 25s cuối (outro). Phong cách 3 & 4: dùng toàn bộ transcript
+                if "Style 1" in style.name or "Style 2" in style.name or getattr(style, "aspect_ratio", "") in ["1:1_blur", "3:4_blur"]:
+                    intro_offset = 10.0
+                    outro_offset = 25.0
+                    max_valid_end = max(0.0, transcript.duration - outro_offset)
+                    logger.info(f"Giới hạn khoảng cắt cho {style.name}: Bỏ 10s đầu và 25s cuối (Chỉ cắt từ {intro_offset:.1f}s đến {max_valid_end:.1f}s)")
+                else:
+                    intro_offset = 0.0
+                    outro_offset = 0.0
+
+                # 3. Phân tích viral segments qua LLM API với bộ lọc Intro/Outro
+                transcript_text = format_transcript_for_llm(transcript, intro_offset=intro_offset, outro_offset=outro_offset)
                 segments: List[ViralSegment] = await loop.run_in_executor(
                     None,
                     analyze_transcript,
@@ -139,16 +154,14 @@ class PipelineOrchestrator:
                     self.config.gemini_api_key,
                     self.prompt_template,
                     transcript.duration,
+                    intro_offset,
+                    outro_offset,
                 )
 
                 if not segments:
                     logger.warning(f"Không tìm thấy đoạn viral cho {video_info.path.name}")
                     progress_bar.update(1)
                     return
-
-                # 3. Xác định phong cách render theo folder index
-                style = resolve_style_for_folder(video_info.folder_index, self.style_mapping)
-                logger.info(f"Sử dụng {style.name} cho folder [{video_info.folder_name}]")
 
                 video_results = []
                 # 4. Render từng clip
@@ -277,9 +290,19 @@ class PipelineOrchestrator:
             cleanup_whisper_model()
 
     def _write_captions_summary(self, results_list: list):
-        """Ghi duy nhất 1 file all_clip_titles.txt tổng hợp tiêu đề và caption rõ ràng, không trùng lặp."""
+        """Ghi duy nhất 1 file all_clip_titles.txt tổng hợp tiêu đề và caption rõ ràng theo thứ tự luân phiên (1.1, 2.1, 3.1, ... 1.2, 2.2, 3.2)."""
         self.bundle_dir.mkdir(parents=True, exist_ok=True)
-        results_list.sort(key=lambda x: x["filename"])
+
+        def get_round_robin_key(item: dict) -> tuple:
+            fn = item.get("filename", "")
+            match = re.search(r'(?:^|[^\d])(\d+)\.(\d+)(?:\.mp4)?$', fn)
+            if match:
+                folder_num = int(match.group(1))
+                clip_num = int(match.group(2))
+                return (clip_num, folder_num)
+            return (999, 999)
+
+        results_list.sort(key=get_round_robin_key)
 
         # Xóa các file txt thừa cũ nếu có để đảm bảo CHỈ CÓ 1 FILE DUY NHẤT
         for old_file in ["danh_sach_tieu_de.txt", "captions.txt"]:

@@ -300,20 +300,37 @@ def transcribe_video(
     )
 
 
-def format_transcript_for_llm(result: TranscriptResult) -> str:
+def format_transcript_for_llm(
+    result: TranscriptResult,
+    intro_offset: float = 0.0,
+    outro_offset: float = 0.0,
+) -> str:
     """Format transcript thành text có timestamp để gửi cho LLM.
+    Hỗ trợ lọc bỏ intro (ví dụ 10s đầu) và outro (ví dụ 25s cuối) khi chạy Phong cách 1 & 2.
 
     Args:
         result: Kết quả transcript.
+        intro_offset: Số giây đầu bỏ qua (ví dụ 10s).
+        outro_offset: Số giây cuối bỏ qua (ví dụ 25s).
 
     Returns:
         Chuỗi text có timestamp, mỗi dòng: [mm:ss] text
     """
     lines: List[str] = []
+    max_end = max(0.0, result.duration - outro_offset) if (outro_offset > 0.0 and result.duration > outro_offset) else float("inf")
     for seg in result.segments:
-        minutes = int(seg.start) // 60
-        seconds = int(seg.start) % 60
-        lines.append(f"[{minutes:02d}:{seconds:02d}] {seg.text}")
+        if seg.start >= intro_offset and (outro_offset == 0.0 or seg.end <= max_end):
+            minutes = int(seg.start) // 60
+            seconds = int(seg.start) % 60
+            lines.append(f"[{minutes:02d}:{seconds:02d}] {seg.text}")
+
+    # Nếu bộ lọc làm rỗng transcript (do video quá ngắn), fallback về full transcript
+    if not lines:
+        for seg in result.segments:
+            minutes = int(seg.start) // 60
+            seconds = int(seg.start) % 60
+            lines.append(f"[{minutes:02d}:{seconds:02d}] {seg.text}")
+
     return "\n".join(lines)
 
 
