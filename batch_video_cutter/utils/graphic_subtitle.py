@@ -181,7 +181,7 @@ def generate_graphic_subtitles(
                 bbox2 = font.getbbox(l2_text) if l2_text else (0, 0, 0, 0)
                 l2_width = bbox2[2] - bbox2[0]
 
-                eff_margin_v = 160 if canvas_size[1] > 1080 else margin_v
+                eff_margin_v = 330 if canvas_size[1] > 1080 else margin_v
                 if position == "top":
                     base_y = 45
                 else:

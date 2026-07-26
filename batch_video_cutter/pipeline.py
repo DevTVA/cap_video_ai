@@ -181,9 +181,9 @@ class PipelineOrchestrator:
                             )
                         )
 
-                        # Nếu phong cách có Top Caption Area (như Style 3), tạo PNG Top Caption Dải Nền Vàng Chữ Đen Ngoặc Kép
-                        title_text = seg.title_en or seg.title_vi
-                        if title_text and getattr(style, "get_caption_area", lambda: None)():
+                        # Đảm bảo 100% video Style 3 & Style 4 đều có Top Caption (nếu thiếu title_en/vi thì tự lấy reason hoặc text thoại để chạy vòng lặp 8-12 từ)
+                        title_text = seg.title_en or seg.title_vi or getattr(seg, "reason", "") or seg.text
+                        if getattr(style, "get_caption_area", lambda: None)():
                             from batch_video_cutter.utils.graphic_subtitle import generate_top_caption_layer
                             top_cap_png = Path(tmp_dir) / f"top_caption_{clip_idx}.png"
                             canvas_res = style.get_output_resolution()
@@ -193,7 +193,7 @@ class PipelineOrchestrator:
                                 output_png=top_cap_png,
                                 canvas_size=canvas_res,
                                 top_area_height=top_area_h,
-                                fallback_text=getattr(seg, "reason", ""),
+                                fallback_text=getattr(seg, "text", ""),
                             )
                             if cap_png_path and cap_png_path.exists():
                                 clip_dur = seg.end_time - seg.start_time
