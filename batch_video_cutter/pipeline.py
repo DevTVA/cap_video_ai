@@ -181,7 +181,22 @@ class PipelineOrchestrator:
                             )
                         )
 
-                        # Render clip bằng FFmpeg với Dynamic Timed HD Color Emoji PNG & Top Caption Title
+                        # Nếu phong cách có Top Caption Area (như Style 3), tạo PNG Top Caption Badge Nền Trắng Chữ Đen giống mẫu ảnh
+                        title_text = seg.title_en or seg.title_vi
+                        if title_text and getattr(style, "get_caption_area", lambda: None)():
+                            from batch_video_cutter.utils.graphic_subtitle import generate_top_caption_layer
+                            top_cap_png = Path(tmp_dir) / f"top_caption_{clip_idx}.png"
+                            cap_png_path = generate_top_caption_layer(
+                                title_text,
+                                output_png=top_cap_png,
+                                canvas_size=style.get_output_resolution(),
+                                top_area_height=280
+                            )
+                            if cap_png_path and cap_png_path.exists():
+                                clip_dur = seg.end_time - seg.start_time
+                                timed_emojis = [(cap_png_path, 0.0, clip_dur)] + (timed_emojis or [])
+
+                        # Render clip bằng FFmpeg với Dynamic Timed HD Color Emoji PNG & Top Caption Badge PNG
                         await loop.run_in_executor(
                             None,
                             functools.partial(
@@ -193,7 +208,7 @@ class PipelineOrchestrator:
                                 style=style,
                                 subtitle_path=sub_path,
                                 timed_emojis=timed_emojis,
-                                title_text=seg.title_en or seg.title_vi,
+                                title_text=title_text,
                             )
                         )
 

@@ -297,3 +297,97 @@ def generate_graphic_subtitles(
 
     logger.info(f"Đã tạo {len(graphic_results)} khung ảnh phụ đề đồ họa Impact CapCut (bản first commit) tại {tmp_dir}")
     return graphic_results
+
+
+def clean_caption_text(text: str) -> str:
+    """Làm sạch ký tự unicode lạ, emoji, nháy cong để không bao giờ bị ô vuông."""
+    if not text:
+        return ""
+    text = text.replace("’", "'").replace("‘", "'").replace("”", '"').replace("“", '"').replace("—", "-")
+    pattern = re.compile(
+        "["
+        "\U00010000-\U0010FFFF"
+        "\u2600-\u27BF"
+        "\u2300-\u23FF"
+        "\u2B00-\u2BFF"
+        "\u2000-\u206F"
+        "\uFE00-\uFE0F"
+        "]+",
+        flags=re.UNICODE,
+    )
+    clean = pattern.sub("", text)
+    clean = re.sub(r"\s+", " ", clean).strip().upper()
+    return clean
+
+
+def generate_top_caption_layer(
+    title_text: str,
+    output_png: Path,
+    canvas_size: Tuple[int, int] = (1080, 1440),
+    top_area_height: int = 280,
+) -> Optional[Path]:
+    """Tạo file PNG chứa Top Caption dạng Badge Nền Trắng Bo Góc + Chữ Đen Viết Hoa giống 100% mẫu ảnh."""
+    if not title_text:
+        return None
+    clean_t = clean_caption_text(title_text)
+    words = clean_t.split()
+    if len(words) > 9:
+        clean_t = " ".join(words[:9])
+
+    import textwrap
+    lines = textwrap.wrap(clean_t, width=24)[:3]
+    if not lines:
+        return None
+
+    font_path = "C:/Windows/Fonts/arialbd.ttf"
+    font_size = 44
+    try:
+        font = ImageFont.truetype(font_path, font_size)
+    except Exception:
+        try:
+            font = ImageFont.truetype("C:/Windows/Fonts/impact.ttf", font_size)
+        except Exception:
+            font = ImageFont.load_default()
+
+    img = Image.new("RGBA", canvas_size, (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+
+    line_boxes = []
+    total_text_h = 0
+    for line in lines:
+        bbox = font.getbbox(line)
+        w = bbox[2] - bbox[0]
+        h = bbox[3] - bbox[1]
+        line_boxes.append((line, w, h))
+        total_text_h += h + 16
+
+    total_text_h -= 16
+
+    pad_h = 14
+    pad_w = 28
+    badge_total_h = total_text_h + pad_h * 2
+    start_y = max(20, (top_area_height - badge_total_h) // 2)
+
+    curr_y = start_y
+    for line, w, h in line_boxes:
+        box_w = w + pad_w * 2
+        box_h = h + pad_h * 2
+        x1 = (canvas_size[0] - box_w) // 2
+        y1 = curr_y
+        x2 = x1 + box_w
+        y2 = y1 + box_h
+
+        # Vẽ Nền Trắng Bo Góc (White Rounded Pill Badge)
+        draw.rounded_rectangle([x1, y1, x2, y2], radius=14, fill=(255, 255, 255, 255))
+
+        # Vẽ Chữ Đen Viết Hoa ở giữa Badge
+        text_x = x1 + pad_w
+        text_y = y1 + pad_h - 2
+        draw.text((text_x, text_y), line, font=font, fill=(0, 0, 0, 255))
+
+        curr_y += box_h + 8
+
+    output_png.parent.mkdir(parents=True, exist_ok=True)
+    img.save(output_png, "PNG")
+    logger.info(f"Đã tạo PNG Top Caption Badge Nền Trắng Chữ Đen: {output_png}")
+    return output_png

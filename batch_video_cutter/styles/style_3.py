@@ -1,56 +1,21 @@
-"""Style 3: Layout 3 vùng cân đối (1080x1440 - 3:4 ratio):
-- Vùng trên (240px nền đen): Top Caption Title CHỮ VIẾT HOA 100%, KHÔNG EMOJI (tránh ô vuông), chữ TRẮNG nổi bật, căn giữa dọc 100%.
-- Vùng giữa (960px): Video stream zoom 150% CapCut style đặt ở giữa cân đối (không che khuất nhân vật).
-- Vùng dưới (240px nền đen): Chứa phụ đề đồ họa & active word highlight.
+"""Style 3: Layout 3 vùng chuẩn mẫu ảnh 100% (Canvas 3:4 1080x1440):
+- Top Caption: Badge Nền Trắng Bo Góc + Chữ Đen Viết Hoa 100%, KHÔNG EMOJI (loại bỏ 100% ô vuông), căn giữa dọc 100% trong dải 280px nền đen phía trên.
+- Video Stream: Zoom 150% CapCut style căn giữa dọc ở trung tâm canvas 3:4.
+- Graphic Subtitles: Font Impact 100pt (tương đương cỡ 15 CapCut), Active Word Highlight Xanh Lá, lề dưới 160px thoáng đẹp.
 """
 
-import re
-import textwrap
 from typing import Optional, Tuple
 from .base import BaseStyle, CaptionArea
 
 
-def strip_emojis(text: str) -> str:
-    """Loại bỏ hoàn toàn tất cả biểu tượng emoji để tránh hiển thị ô vuông 🔲 trên font Impact."""
-    if not text:
-        return ""
-    pattern = re.compile(
-        "["
-        "\U00010000-\U0010FFFF"
-        "\u2600-\u27BF"
-        "\u2300-\u23FF"
-        "\u2B00-\u2BFF"
-        "\u2000-\u206F"
-        "\uFE00-\uFE0F"
-        "]+",
-        flags=re.UNICODE,
-    )
-    clean = pattern.sub("", text)
-    clean = re.sub(r"\s+", " ", clean).strip()
-    return clean
-
-
-def format_top_caption_title(title_text: str, max_words: int = 9, max_width: int = 24) -> str:
-    """Loại bỏ emoji, viết HOA toàn bộ và chia dòng tiêu đề ngắn gọn (8-9 từ)."""
-    if not title_text:
-        return ""
-    clean_t = strip_emojis(title_text).upper()
-    words = clean_t.split()
-    if len(words) > max_words:
-        clean_t = " ".join(words[:max_words])
-    lines = textwrap.wrap(clean_t, width=max_width)
-    lines = lines[:3]  # Tối đa 3 dòng ngắn
-    return "\n".join(lines)
-
-
 class Style3(BaseStyle):
-    """Phong cách 3: Layout 3 vùng đối xứng 3:4 (Top black 240px, Middle video 960px, Bottom black 240px)."""
+    """Phong cách 3: Canvas 3:4 Nền Đen + Top Caption Badge Nền Trắng Chữ Đen + Phụ đề CapCut 100pt."""
 
-    CAPTION_HEIGHT_RATIO = 0.1667  # 240px / 1440px = 1/6
+    CAPTION_HEIGHT_RATIO = 0.1944  # 280px / 1440px
 
     @property
     def name(self) -> str:
-        return "Style 3 - 3:4 Balanced Layout + Top White Upper Caption (No Emoji)"
+        return "Style 3 - 3:4 Black Background + Top White Badge Black Text Caption (No Emoji)"
 
     @property
     def aspect_ratio(self) -> str:
@@ -62,7 +27,7 @@ class Style3(BaseStyle):
 
     def get_caption_area(self) -> Optional[CaptionArea]:
         out_w, out_h = self.get_output_resolution()
-        caption_h = 240
+        caption_h = 280
         return CaptionArea(
             x=0,
             y=0,
@@ -79,42 +44,26 @@ class Style3(BaseStyle):
         title_text: Optional[str] = None,
     ) -> Tuple[str, str]:
         out_w, out_h = self.get_output_resolution()  # 1080x1440
-        caption_h = 240  # Vùng đen trên cùng (240px)
-        video_area_h = 960  # Vùng video ở giữa (960px)
 
         if input_width <= 0 or input_height <= 0:
             input_width, input_height = 1920, 1080
 
         # Phóng đại 150% CapCut zoom chuẩn 100% theo Phong cách 1 & 2
-        scale_factor = max((out_w * 1.5) / input_width, (video_area_h * 1.5) / input_height)
-        fg_w = int(input_width * scale_factor)
-        fg_h = int(input_height * scale_factor)
+        fit_w = out_w
+        fit_h = int(input_height * (out_w / input_width))
 
-        crop_x = (fg_w - out_w) // 2
-        crop_y = (fg_h - video_area_h) // 2
+        fg_w = int(fit_w * 1.5)
+        fg_h = int(fit_h * 1.5)
+
+        overlay_x = (out_w - fg_w) // 2
+        overlay_y = (out_h - fg_h) // 2  # Căn giữa dọc video ở trung tâm canvas 3:4
 
         filters = [
-            f"[0:v]scale={fg_w}:{fg_h},crop={out_w}:{video_area_h}:{crop_x}:{crop_y},"
-            f"pad={out_w}:{out_h}:0:{caption_h}:black[styled]"
+            f"color=c=black:s={out_w}x{out_h}:r=30[canvas]",
+            f"[0:v]scale={fg_w}:{fg_h}[fg_scaled]",
+            f"[canvas][fg_scaled]overlay={overlay_x}:{overlay_y}:shortest=1[styled]",
         ]
         output_label = "[styled]"
-
-        # Render Top Caption Title CHỮ VIẾT HOA 100%, KHÔNG EMOJI, MÀU TRẮNG sang trọng (Căn giữa dọc y=(240-text_h)/2)
-        if title_text:
-            formatted_title = format_top_caption_title(title_text, max_words=9, max_width=24)
-            safe_title = (
-                formatted_title.replace("'", "")
-                .replace(":", "\\:")
-                .replace("%", "\\%")
-                .replace("[", "\\[")
-                .replace("]", "\\]")
-            )
-            font_path = "C\\:/Windows/Fonts/impact.ttf"
-            filters.append(
-                f"[styled]drawtext=fontfile='{font_path}':text='{safe_title}':fontcolor=white:"
-                f"fontsize=46:line_spacing=12:x=(w-text_w)/2:y=(240-text_h)/2:shadowcolor=black:shadowx=3:shadowy=3[styled_title]"
-            )
-            output_label = "[styled_title]"
 
         if subtitle_path:
             ass_filter = self.format_ass_filter(subtitle_path)
@@ -132,8 +81,8 @@ class Style3(BaseStyle):
         return "green"
 
     def get_font_size(self) -> int:
-        """Cỡ font Phong cách 1 (85pt)."""
-        return 85
+        """Cỡ font 100pt chuẩn tương đương cỡ 15 trong CapCut."""
+        return 100
 
     def get_italic_option(self) -> bool:
         return False
