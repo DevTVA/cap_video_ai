@@ -44,23 +44,25 @@ class Style4(BaseStyle):
         title_text: Optional[str] = None,
     ) -> Tuple[str, str]:
         out_w, out_h = self.get_output_resolution()  # 1080x1440
-        caption_h = 280  # Vùng đen phía trên (280px)
-        video_area_h = 960  # Vùng video ở giữa (960px)
 
         if input_width <= 0 or input_height <= 0:
             input_width, input_height = 1920, 1080
 
-        # Scale 150% CapCut zoom chuẩn 100% theo Phong cách 1 & 2
-        scale_factor = max((out_w * 1.5) / input_width, (video_area_h * 1.5) / input_height)
-        fg_w = int(input_width * scale_factor)
-        fg_h = int(input_height * scale_factor)
+        # Công thức Zoom 150% CapCut chuẩn 100% giống hệt Style 2 (Width=1620px, no vertical crop cho video 16:9)
+        fit_w = out_w
+        fit_h = int(input_height * (out_w / input_width))
 
+        fg_w = int(fit_w * 1.5)
+        fg_h = int(fit_h * 1.5)
+
+        final_h = min(fg_h, out_h)
         crop_x = (fg_w - out_w) // 2
-        crop_y = (fg_h - video_area_h) // 2
+        crop_y = (fg_h - final_h) // 2
+        overlay_y = (out_h - final_h) // 2  # Căn giữa khung hình trên canvas 1440px giống hệt Style 2
 
         filters = [
-            f"[0:v]scale={fg_w}:{fg_h},crop={out_w}:{video_area_h}:{crop_x}:{crop_y},"
-            f"pad={out_w}:{out_h}:0:{caption_h}:black[styled]"
+            f"[0:v]scale={fg_w}:{fg_h},crop={out_w}:{final_h}:{crop_x}:{crop_y},"
+            f"pad={out_w}:{out_h}:0:{overlay_y}:black[styled]"
         ]
         output_label = "[styled]"
 
