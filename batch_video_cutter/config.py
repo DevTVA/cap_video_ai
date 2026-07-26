@@ -1,0 +1,46 @@
+"""Configuration module for Batch Video Cutter.
+"""
+
+import os
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Optional
+from dotenv import load_dotenv
+
+load_dotenv()
+
+DEFAULT_INPUT_DIR = Path(r"C:\Users\Admin\Desktop\output")
+DEFAULT_OUTPUT_DIR = Path(r"C:\Users\Admin\Desktop\output\final_clips")
+
+
+@dataclass
+class AppConfig:
+    """Application configuration container."""
+
+    input_dir: Path = field(default_factory=lambda: DEFAULT_INPUT_DIR)
+    output_dir: Path = field(default_factory=lambda: DEFAULT_OUTPUT_DIR)
+    style_mapping_str: str = "1-12:1,13-24:2,25-36:3,37-50:4"
+    max_clips_per_video: int = 3
+    max_workers: int = 2
+    whisper_model: str = "base.en"
+    gemini_api_key: str = field(default_factory=lambda: os.getenv("GEMINI_API_KEY", ""))
+    prompt_template_path: Optional[Path] = None
+    session_folder_name: Optional[str] = None
+
+    def __post_init__(self):
+        if not self.input_dir:
+            self.input_dir = DEFAULT_INPUT_DIR
+        self.input_dir = Path(self.input_dir).resolve()
+
+        if not self.output_dir:
+            self.output_dir = DEFAULT_OUTPUT_DIR
+        self.output_dir = Path(self.output_dir).resolve()
+
+        if self.prompt_template_path:
+            self.prompt_template_path = Path(self.prompt_template_path).resolve()
+        else:
+            default_script = Path(__file__).parent.parent / "scipt.txt"
+            if default_script.exists():
+                self.prompt_template_path = default_script.resolve()
+
+

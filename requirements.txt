@@ -1,0 +1,7 @@
+faster-whisper==1.1.0
+google-generativeai==0.8.5
+click==8.1.8
+rich==13.9.4
+tqdm==4.67.1
+loguru==0.7.3
+python-dotenv==1.0.1

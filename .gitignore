@@ -1,0 +1,35 @@
+# Python bytecode & cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Virtual environments
+venv/
+.venv/
+env/
+ENV/
+
+# Project output, scratch files, and cache
+final_clips/
+g_subs_tmp/
+scratch/
+emojis_cache/
+*.ass
+*.mp4
+*.jpg
+*.png
+!batch_video_cutter/assets/**
+
+# Environment variables & state
+.env
+pipeline_state.json
+pipeline_state_*.json
+all_clip_titles.txt
+
+# IDE & OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
