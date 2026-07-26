@@ -476,14 +476,12 @@ def generate_top_caption_layer(
         total_text_h -= 10
 
         pad_h = 16
-        pad_w = 32
-        badge_w = max_line_w + pad_w * 2
+        margin_x = 40
+        badge_x1 = margin_x
+        badge_x2 = canvas_size[0] - margin_x  # 1040px (Thụt lề trái 40px và lề phải 40px 100% tuyệt đối)
         badge_h = total_text_h + pad_h * 2
 
-        # Lề thụt trái & thụt phải tối thiểu 40px mỗi bên
-        badge_x1 = (canvas_size[0] - badge_w) // 2
         badge_y1 = max(15, (top_area_height - badge_h) // 2)
-        badge_x2 = badge_x1 + badge_w
         badge_y2 = badge_y1 + badge_h
 
         # Vẽ Single White Rounded Rectangle Badge (radius=18)
