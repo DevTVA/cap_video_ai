@@ -197,25 +197,33 @@ def generate_graphic_subtitles(
                         clean_w = re.sub(r'>>+|[<>\[\]()]', '', word_text).upper().strip()
                         if not clean_w:
                             continue
+                        color = (0, 255, 0, 255) if idx == active_idx else primary_rgba
 
-                        if idx == active_idx:
-                            # Active Word Box (Hộp Nền Bo Góc Nổi Bật Nền Vàng/Xanh Chữ Đen theo chuẩn SubMagic/OpusClip)
-                            w_bbox = font.getbbox(clean_w)
-                            w_len = w_bbox[2] - w_bbox[0]
-                            h_len = w_bbox[3] - w_bbox[1]
-                            pad_bx, pad_by = 10, 6
-                            box_x1 = x_cursor - pad_bx
-                            box_y1 = y1 - pad_by
-                            box_x2 = x_cursor + w_len + pad_bx
-                            box_y2 = y1 + h_len + pad_by + 10
-                            text_draw.rounded_rectangle([box_x1, box_y1, box_x2, box_y2], radius=10, fill=active_rgba)
-                            text_draw.text((x_cursor, y1), clean_w, font=font, fill=(0, 0, 0, 255), stroke_width=0)
-                        else:
-                            # Soft Drop Shadow & 2-Pass Solid Stroke
-                            shadow_draw.text((x_cursor + 5, y1 + 5), clean_w, font=font, fill=(0, 0, 0, 200), stroke_width=8, stroke_fill=(0, 0, 0, 200))
-                            text_draw.text((x_cursor, y1), clean_w, font=font, fill=(0, 0, 0, 255), stroke_width=8, stroke_fill=(0, 0, 0, 255))
-                            text_draw.text((x_cursor, y1), clean_w, font=font, fill=primary_rgba, stroke_width=0)
-
+                        # Soft Drop Shadow
+                        shadow_draw.text(
+                            (x_cursor + 5, y1 + 5),
+                            clean_w,
+                            font=font,
+                            fill=(0, 0, 0, 200),
+                            stroke_width=8,
+                            stroke_fill=(0, 0, 0, 200),
+                        )
+                        # Text chính (Kỹ thuật 2-Pass Stroke bản commit 1: Pass 1 viền đen mập 8px, Pass 2 ruột đặc 100%)
+                        text_draw.text(
+                            (x_cursor, y1),
+                            clean_w,
+                            font=font,
+                            fill=(0, 0, 0, 255),
+                            stroke_width=8,
+                            stroke_fill=(0, 0, 0, 255),
+                        )
+                        text_draw.text(
+                            (x_cursor, y1),
+                            clean_w,
+                            font=font,
+                            fill=color,
+                            stroke_width=0,
+                        )
                         w_box = font.getbbox(clean_w + " ")
                         x_cursor += (w_box[2] - w_box[0])
 
@@ -229,25 +237,33 @@ def generate_graphic_subtitles(
                         clean_w = re.sub(r'>>+|[<>\[\]()]', '', word_text).upper().strip()
                         if not clean_w:
                             continue
+                        color = (0, 255, 0, 255) if idx == active_idx else primary_rgba
 
-                        if idx == active_idx:
-                            # Active Word Box (Hộp Nền Bo Góc Nổi Bật Nền Vàng/Xanh Chữ Đen theo chuẩn SubMagic/OpusClip)
-                            w_bbox = font.getbbox(clean_w)
-                            w_len = w_bbox[2] - w_bbox[0]
-                            h_len = w_bbox[3] - w_bbox[1]
-                            pad_bx, pad_by = 10, 6
-                            box_x1 = x_cursor - pad_bx
-                            box_y1 = y2 - pad_by
-                            box_x2 = x_cursor + w_len + pad_bx
-                            box_y2 = y2 + h_len + pad_by + 10
-                            text_draw.rounded_rectangle([box_x1, box_y1, box_x2, box_y2], radius=10, fill=active_rgba)
-                            text_draw.text((x_cursor, y2), clean_w, font=font, fill=(0, 0, 0, 255), stroke_width=0)
-                        else:
-                            # Soft Drop Shadow & 2-Pass Solid Stroke
-                            shadow_draw.text((x_cursor + 5, y2 + 5), clean_w, font=font, fill=(0, 0, 0, 200), stroke_width=8, stroke_fill=(0, 0, 0, 200))
-                            text_draw.text((x_cursor, y2), clean_w, font=font, fill=(0, 0, 0, 255), stroke_width=8, stroke_fill=(0, 0, 0, 255))
-                            text_draw.text((x_cursor, y2), clean_w, font=font, fill=primary_rgba, stroke_width=0)
-
+                        # Soft Drop Shadow
+                        shadow_draw.text(
+                            (x_cursor + 5, y2 + 5),
+                            clean_w,
+                            font=font,
+                            fill=(0, 0, 0, 200),
+                            stroke_width=8,
+                            stroke_fill=(0, 0, 0, 200),
+                        )
+                        # Text chính (Kỹ thuật 2-Pass Stroke bản commit 1: Pass 1 viền đen mập 8px, Pass 2 ruột đặc 100%)
+                        text_draw.text(
+                            (x_cursor, y2),
+                            clean_w,
+                            font=font,
+                            fill=(0, 0, 0, 255),
+                            stroke_width=8,
+                            stroke_fill=(0, 0, 0, 255),
+                        )
+                        text_draw.text(
+                            (x_cursor, y2),
+                            clean_w,
+                            font=font,
+                            fill=color,
+                            stroke_width=0,
+                        )
                         w_box = font.getbbox(clean_w + " ")
                         x_cursor += (w_box[2] - w_box[0])
 
