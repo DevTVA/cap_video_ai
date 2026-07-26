@@ -1,8 +1,8 @@
-"""Style 3: Scale 150% CapCut-style, tỷ lệ 3:4 (1080x1440), nền đen, phần trên hiển thị Top Caption Title.
+"""Style 3: Chuẩn 100% Zoom & Phụ đề Phong cách 1, tỷ lệ 3:4 (1080x1440), Nền đen, Top Caption chữ TRẮNG rực rỡ.
 
-Video gốc được scale 150% và đặt phía dưới canvas 3:4 (1080x1440).
-Phần trên (khoảng 20% canvas = 288px) có nền đen để hiển thị Caption Title rực rỡ (tự động xuống dòng 2-3 dòng không bao giờ tràn khung).
-Phụ đề được đặt ở phía dưới màn hình (bottom) vô cùng thoáng đẹp, không bị đè nhau.
+Video gốc được scale 150% chuẩn xác theo Phong cách 1 (không bị mất bối cảnh video), đặt trên nền đen canvas 3:4 (1080x1440).
+Phần trên (dải 288px) hiển thị tiêu đề Top Caption màu TRẮNG tinh tế, sang trọng (tối đa 8-10 từ, xuống dòng tự động).
+Phụ đề đồ họa & Highlight xanh lá CapCut lấy chuẩn 100% theo Phong cách 1, hiển thị ở phía dưới màn hình (bottom).
 """
 
 import textwrap
@@ -24,13 +24,13 @@ def format_top_caption_title(title_text: str, max_words: int = 9, max_width: int
 
 
 class Style3(BaseStyle):
-    """Phong cách 3: 3:4 nền đen với vùng caption trên và 150% CapCut zoom."""
+    """Phong cách 3: Chuẩn Zoom & Phụ đề Phong cách 1 trên Canvas 3:4 Nền Đen + Top Caption Chữ Trắng."""
 
     CAPTION_HEIGHT_RATIO = 0.20  # 20% canvas cho caption (288px)
 
     @property
     def name(self) -> str:
-        return "Style 3 - 3:4 Black Background + Top Caption (CapCut 150% Zoom)"
+        return "Style 3 - 3:4 Black Background + Top White Caption (CapCut 150% Zoom)"
 
     @property
     def aspect_ratio(self) -> str:
@@ -65,23 +65,28 @@ class Style3(BaseStyle):
         if input_width <= 0 or input_height <= 0:
             input_width, input_height = 1920, 1080
 
-        # Đảm bảo scale_factor luôn lớn hơn hoặc bằng target crop cho MỌI resolution video (16:9, 9:16, 1:1, v.v.)
-        scale_factor = max((out_w * 1.5) / input_width, (video_area_h * 1.5) / input_height)
-        fg_w = int(input_width * scale_factor)
-        fg_h = int(input_height * scale_factor)
+        # LẤY CHUẨN 100% CÔNG THỨC SCALING ZOOM 150% CỦA PHONG CÁCH 1:
+        # Tính kích thước vừa khung width 1080
+        fit_w = out_w
+        fit_h = int(input_height * (out_w / input_width))
 
-        crop_x = (fg_w - out_w) // 2
-        crop_y = (fg_h - video_area_h) // 2
+        # Phóng to 150% đúng chuẩn CapCut Phong cách 1
+        fg_w = int(fit_w * 1.5)
+        fg_h = int(fit_h * 1.5)
+
+        overlay_x = (out_w - fg_w) // 2
+        overlay_y = caption_h + (video_area_h - fg_h) // 2
 
         filters = [
-            f"[0:v]scale={fg_w}:{fg_h},crop={out_w}:{video_area_h}:{crop_x}:{crop_y},"
-            f"pad={out_w}:{out_h}:0:{caption_h}:black[styled]"
+            f"color=c=black:s={out_w}x{out_h}:r=30[canvas]",
+            f"[0:v]scale={fg_w}:{fg_h}[fg_scaled]",
+            f"[canvas][fg_scaled]overlay={overlay_x}:{overlay_y}:shortest=1[styled]",
         ]
         output_label = "[styled]"
 
-        # Render Top Caption Title màu Vàng rực rỡ ở vùng nền đen trên cùng (Tự động xuống dòng chuẩn 100%)
+        # Render Top Caption Title CHỮ MÀU TRẮNG sang trọng ở vùng nền đen trên cùng (8-10 từ, xuống dòng tự động)
         if title_text:
-            formatted_title = format_top_caption_title(title_text, max_width=24)
+            formatted_title = format_top_caption_title(title_text, max_words=9, max_width=24)
             safe_title = (
                 formatted_title.replace("'", "")
                 .replace(":", "\\:")
@@ -90,9 +95,8 @@ class Style3(BaseStyle):
                 .replace("]", "\\]")
             )
             font_path = "C\\:/Windows/Fonts/impact.ttf"
-            # Cân chỉnh y=75 và line_spacing=12 cho 2-3 dòng tiêu đề vừa vặn trong dải 288px nền đen
             filters.append(
-                f"[styled]drawtext=fontfile='{font_path}':text='{safe_title}':fontcolor=yellow:"
+                f"[styled]drawtext=fontfile='{font_path}':text='{safe_title}':fontcolor=white:"
                 f"fontsize=46:line_spacing=12:x=(w-text_w)/2:y=75:shadowcolor=black:shadowx=3:shadowy=3[styled_title]"
             )
             output_label = "[styled_title]"
@@ -109,7 +113,13 @@ class Style3(BaseStyle):
         return "bottom"
 
     def get_highlight_color(self) -> str:
-        return "yellow"
+        """Lấy chuẩn 100% màu Highlight Phong cách 1 ("green")."""
+        return "green"
+
+    def get_font_size(self) -> int:
+        """Lấy chuẩn 100% cỡ font Phong cách 1 (85pt)."""
+        return 85
 
     def get_italic_option(self) -> bool:
+        """Lấy chuẩn 100% không nghiêng chữ giống Phong cách 1."""
         return False
