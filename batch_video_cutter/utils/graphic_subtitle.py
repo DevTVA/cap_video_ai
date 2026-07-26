@@ -122,13 +122,30 @@ def generate_graphic_subtitles(
 
         if not words_list:
             continue
-        # Tính nhịp nói trung bình của phân đoạn (giây/từ)
-        line_duration = line.end - line.start
-        avg_word_dur = line_duration / max(1, len(words_list)) if line_duration > 0 else 0.3
+        # Thuật toán ngắt nhịp thoại chuẩn theo nhịp thở, khoảng nghỉ và dấu câu thực tế của nhân vật:
+        chunks = []
+        curr_chunk = []
+        for i, word_info in enumerate(words_list):
+            w_text, w_start, w_end = word_info
+            curr_chunk.append(word_info)
 
-        # Nếu nhân vật nói nhanh (<0.28s/từ): gộp 2-3 từ/chunk; nếu nói bình thường: 3-4 từ/chunk
-        chunk_size = 3 if avg_word_dur < 0.28 else 4
-        chunks = [words_list[i:i + chunk_size] for i in range(0, len(words_list), chunk_size)]
+            # 1. Dấu hiệu ngắt nhịp thoại theo dấu câu (., !, ?, ,, ;, :)
+            clean_w = re.sub(r'>>+|[<>\[\]()]', '', w_text).strip()
+            has_punctuation = bool(re.search(r'[.,!?;:]$', clean_w))
+
+            # 2. Khoảng ngắt nghỉ tự nhiên giữa 2 từ thoại > 0.22 giây
+            has_pause = False
+            if i < len(words_list) - 1:
+                next_start = words_list[i + 1][1]
+                if next_start - w_end > 0.22:
+                    has_pause = True
+
+            # 3. Đạt số từ tối đa trong 1 cụm (3-4 từ)
+            reached_max_words = len(curr_chunk) >= 4
+
+            if has_punctuation or has_pause or reached_max_words or i == len(words_list) - 1:
+                chunks.append(curr_chunk)
+                curr_chunk = []
 
         for chunk_idx, chunk in enumerate(chunks):
             if not chunk:
@@ -167,11 +184,17 @@ def generate_graphic_subtitles(
                 line1_words = chunk[:mid_point]
                 line2_words = chunk[mid_point:]
 
-            # Render từng mốc thoại trong chunk
+            # Render từng mốc thoại trong chunk theo nhịp nói thực tế
             for active_idx, active_word_info in enumerate(chunk):
                 w_word, w_start, w_end = active_word_info
                 if w_start >= w_end:
                     continue
+
+                # Mốc thời lượng hiển thị khớp từ w_start đến từ kế tiếp (hoặc cuối chunk)
+                if active_idx < len(chunk) - 1:
+                    frame_end = max(w_end, chunk[active_idx + 1][1] - 0.01)
+                else:
+                    frame_end = max(w_end, chunk[-1][2])
 
                 active_rgba = dynamic_rgbas[color_counter % len(dynamic_rgbas)]
                 color_counter += 1
@@ -295,7 +318,7 @@ def generate_graphic_subtitles(
                 frame_count += 1
                 out_png_path = tmp_dir / f"g_sub_{frame_count:04d}.png"
                 composite.save(out_png_path, "PNG")
-                graphic_results.append((out_png_path, w_start, w_end))
+                graphic_results.append((out_png_path, w_start, frame_end))
 
     # Khử đè thời gian & Gộp các khung chớp nháy quá ngắn khi nhân vật nói nhanh (Chống chớp nháy 100%)
     if graphic_results:
