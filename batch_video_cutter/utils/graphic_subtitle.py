@@ -316,29 +316,31 @@ def generate_graphic_subtitles(
                 composite.save(out_png_path, "PNG")
                 graphic_results.append((out_png_path, w_start, frame_end))
 
-    # Khử đè thời gian & Gộp các khung chớp nháy quá ngắn khi nhân vật nói nhanh (Chống chớp nháy 100%)
+    # Khử chớp nháy 100% (Anti-Flicker Seamless Subtitle Engine)
     if graphic_results:
         graphic_results.sort(key=lambda x: x[1])
-        merged = []
-        for p, s, e in graphic_results:
-            # Nếu thời lượng quá ngắn (< 0.35s) và có khung trước đó gần kề:
-            if merged and (s - merged[-1][2] < 0.05) and (merged[-1][2] - merged[-1][1] < 0.35):
-                # Nối dài thời lượng khung trước đó lên
-                prev_p, prev_s, prev_e = merged[-1]
-                merged[-1] = (prev_p, prev_s, max(e, prev_s + 0.35))
-            else:
-                display_end = max(e, s + 0.35)
-                merged.append((p, s, display_end))
-
-        # Đảm bảo khung sau đè hợp lý không trùng khớp
         sanitized = []
-        for i in range(len(merged)):
-            p, s, e = merged[i]
-            if i < len(merged) - 1:
-                next_s = merged[i + 1][1]
-                e = min(e, next_s - 0.02)
-            if e > s + 0.02:
-                sanitized.append((p, s, e))
+        n = len(graphic_results)
+
+        for i in range(n):
+            path, s, e = graphic_results[i]
+
+            # 1. Đảm bảo thời lượng tối thiểu hiển thị của 1 khung phụ đề không dưới 0.35s
+            if (e - s) < 0.35:
+                e = s + 0.35
+
+            # 2. Xử lý va chạm & trám khoảng lặng trống giữa các khung để phụ đề KHÔNG BAO GIỜ BỊ TẮT ĐEN CHỚP NHÁY
+            if i < n - 1:
+                next_s = graphic_results[i + 1][1]
+                # Nếu khoảng lặng giữa 2 khung nhỏ hơn 0.50s -> Trám kín khoảng lặng kéo dài sát khung kế tiếp!
+                if next_s > s and (next_s - e) < 0.50:
+                    e = next_s - 0.01
+                elif e >= next_s:
+                    e = max(s + 0.10, next_s - 0.01)
+
+            if e > s + 0.05:
+                sanitized.append((path, round(s, 3), round(e, 3)))
+
         graphic_results = sanitized
 
     logger.info(f"Đã tạo {len(graphic_results)} khung ảnh phụ đề đồ họa Impact CapCut (bản first commit) tại {tmp_dir}")
