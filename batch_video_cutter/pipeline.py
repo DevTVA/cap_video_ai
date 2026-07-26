@@ -258,7 +258,7 @@ class PipelineOrchestrator:
         ]
 
         for stt, item in enumerate(results_list, 1):
-            lines.append(f"[STT {stt}]")
+            lines.append(f"[{item['filename']}]")
             lines.append(f"File Output       : {item['filename']}")
             lines.append(f"Tiêu Đề / Caption  : {item['title']}")
             lines.append(f"Folder Video Gốc  : {item['folder_name']}")
