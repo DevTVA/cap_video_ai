@@ -48,16 +48,18 @@ class Style3(BaseStyle):
         caption_h = int(out_h * self.CAPTION_HEIGHT_RATIO)  # 288px
         video_area_h = out_h - caption_h  # 1152px
 
-        scaled_w = out_w
-        scaled_h = int(input_height * (out_w / input_width)) if input_width > 0 else 1080
+        # Đảm bảo kích thước scaled sau 1.5x zoom LUÔN LUÔN lớn hơn hoặc bằng (out_w, video_area_h) cho MỌI resolution video (16:9, 9:16, v.v.)
+        if input_width <= 0 or input_height <= 0:
+            input_width, input_height = 1920, 1080
 
-        fg_w = int(scaled_w * 1.5)
-        fg_h = int(scaled_h * 1.5)
+        scale_factor = max((out_w * 1.5) / input_width, (video_area_h * 1.5) / input_height)
+        fg_w = int(input_width * scale_factor)
+        fg_h = int(input_height * scale_factor)
 
-        crop_x = max(0, (fg_w - out_w) // 2)
-        crop_y = max(0, (fg_h - video_area_h) // 2)
+        crop_x = (fg_w - out_w) // 2
+        crop_y = (fg_h - video_area_h) // 2
 
-        # Cắt xén video đúng 1080x1152 trước khi pad 1080x1440 (tránh đứng video & tránh lỗi pad nhỏ hơn input)
+        # Cắt xén video đúng 1080x1152 trước khi pad 1080x1440 (đảm bảo 100% không bao giờ bị lỗi crop size)
         filters = [
             f"[0:v]scale={fg_w}:{fg_h},crop={out_w}:{video_area_h}:{crop_x}:{crop_y},"
             f"pad={out_w}:{out_h}:0:{caption_h}:black[styled]"
