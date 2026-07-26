@@ -400,20 +400,27 @@ def generate_top_caption_layer(
             curr_y += h + 8
         logger.info(f"Đã tạo PNG Top Caption Dải Nền Vàng (Style 3): {output_png}")
 
-    # 2. Nếu là Canvas 3:4 (1080x1440): Render SINGLE WHITE BADGE BO GÓC + THỤT LỀ 2 BÊN 40PX (Style 4)
+    # 2. Nếu là Canvas 3:4 (1080x1440): Render SINGLE WHITE BADGE BO GÓC + THỤT LỀ 2 BÊN + AN TOÀN GÓC BO (Style 4)
     else:
         # Giới hạn tối đa từ 8 đến 11 từ
         if len(words) > 11:
             clean_t = " ".join(words[:11])
+            words = words[:11]
 
         # Dòng 1 để trong ngoặc kép "..."
-        first_line_len = min(5, len(words))
+        first_line_len = min(3, len(words))
         line1_text = f'"{ " ".join(words[:first_line_len]) }"'
         line2_text = " ".join(words[first_line_len:])
         lines = [line1_text]
         if line2_text:
-            lines.extend(textwrap.wrap(line2_text, width=22))
+            lines.extend(textwrap.wrap(line2_text, width=17))
         lines = lines[:3]
+
+        # Dùng font_size=38pt vừa vặn, không bao giờ bị dính viền góc bo
+        try:
+            font = ImageFont.truetype(font_path, 38)
+        except Exception:
+            font = ImageFont.load_default()
 
         line_boxes = []
         max_line_w = 0
@@ -427,9 +434,9 @@ def generate_top_caption_layer(
             total_text_h += h + 10
         total_text_h -= 10
 
+        # Padding ngang rộng pad_w=48px để chữ không bao giờ chạm góc bo radius=18
         pad_h = 16
-        pad_w = 28
-        # Thụt lề trái & thụt lề phải ít nhất 40px mỗi bên (canvas 1080 -> max width 1000px)
+        pad_w = 48
         badge_w = min(max_line_w + pad_w * 2, canvas_size[0] - 80)
         badge_h = total_text_h + pad_h * 2
 
@@ -446,7 +453,7 @@ def generate_top_caption_layer(
             text_x = (canvas_size[0] - w) // 2
             draw.text((text_x, curr_y), line, font=font, fill=(0, 0, 0, 255))
             curr_y += h + 10
-        logger.info(f"Đã tạo PNG Top Caption Single White Badge Bo Góc Thụt Lề 40px (Style 4): {output_png}")
+        logger.info(f"Đã tạo PNG Top Caption Single White Badge Bo Góc An Toàn (Style 4): {output_png}")
 
     output_png.parent.mkdir(parents=True, exist_ok=True)
     img.save(output_png, "PNG")
