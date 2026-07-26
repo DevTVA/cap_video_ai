@@ -1,7 +1,8 @@
 """Graphic Subtitle Layer Generator using Pillow.
 
-Renders subtitle text with Montserrat Bold modern sans-serif font, straight 0° upright orientation,
-soft 3D drop shadow, thick 7px black stroke, 3-color active word highlighting (Neon Green/Yellow/Red),
+Renders subtitle text with classic CapCut Impact font from first commit,
+solid 2-pass 8px black stroke (100% solid fill), soft 3D drop shadow,
+3-color active word highlighting (Neon Green/Yellow/Red),
 and pastes HD Color 3D PNG Emojis directly to the right of the period on a transparent PNG layer.
 Ensures 100% frame-accurate timing and exact pixel positioning.
 """
@@ -37,21 +38,27 @@ def _hex_to_rgba(color_str: str) -> Tuple[int, int, int, int]:
 
 
 def _get_font(font_name: str, font_size: int) -> ImageFont.FreeTypeFont:
-    """Tải chính xác font TTF Montserrat Bold hiện đại từ assets/fonts."""
+    """Tải chính xác font Impact CapCut cổ điển kinh điển từ first commit (C:/Windows/Fonts/impact.ttf)."""
     fonts_dir = Path(__file__).parent.parent / "assets" / "fonts"
+    win_impact = Path("C:/Windows/Fonts/impact.ttf")
     clean_target = font_name.replace(" ", "").replace("-", "").replace("_", "").lower()
 
-    # 1. Danh sách ưu tiên font Montserrat Bold hiện đại đứng thẳng
+    # 1. Kiểm tra font Impact trong C:/Windows/Fonts trước tiên (Font CapCut bản first commit)
+    if win_impact.exists():
+        try:
+            return ImageFont.truetype(str(win_impact), font_size)
+        except Exception:
+            pass
+
+    # 2. Match các font khác nếu có
     primary_paths = [
         fonts_dir / "Montserrat-Bold.ttf",
-        fonts_dir / "Fredoka-Bold.ttf",
         fonts_dir / "LuckiestGuy-Regular.ttf",
         fonts_dir / "TitanOne-Regular.ttf",
+        fonts_dir / "Fredoka-Bold.ttf",
         fonts_dir / "Bangers-Regular.ttf",
-        Path("C:/Windows/Fonts/impact.ttf"),
     ]
 
-    # Matching tên font nếu người dùng truyền tên cụ thể
     if fonts_dir.exists():
         for font_file in fonts_dir.glob("*.ttf"):
             stem_clean = font_file.stem.replace(" ", "").replace("-", "").replace("_", "").lower()
@@ -74,25 +81,25 @@ def _get_font(font_name: str, font_size: int) -> ImageFont.FreeTypeFont:
 def generate_graphic_subtitles(
     subtitle_lines: List[SubtitleLine],
     tmp_dir: Path,
-    font_name: str = "Montserrat",
-    font_size: int = 80,
+    font_name: str = "Impact",
+    font_size: int = 85,
     primary_color: str = "&H00FFFFFF",
     highlight_color_name: str = "dynamic",
     margin_v: int = 180,
     emoji_on_top: bool = True,
     canvas_size: Tuple[int, int] = (1080, 1080),
 ) -> List[Tuple[Path, float, float]]:
-    """Tạo danh sách các file ảnh PNG phụ đề đồ họa trong suốt chuẩn mẫu "OR SUFFER THE CONSEQUENCES" (Montserrat Bold, Stand 0°, Soft Drop Shadow, HD Emoji màu)."""
+    """Tạo danh sách các file ảnh PNG phụ đề đồ họa trong suốt chuẩn font Impact bản first commit (Ruột đặc 100%, Viền đen mập 8px, Soft Drop Shadow, HD Emoji màu)."""
     tmp_dir = Path(tmp_dir)
     tmp_dir.mkdir(parents=True, exist_ok=True)
 
     font = _get_font(font_name, font_size)
     primary_rgba = (255, 255, 255, 255) # Trắng Tươi cho từ chưa active
-    stroke_rgba = (0, 0, 0, 255) # Viền đen mập 7px
+    stroke_rgba = (0, 0, 0, 255) # Viền đen mập
 
     # Gam màu Highlight nổi bật: Xanh lá neon (#00FF00), Vàng tươi (#FFFF00), Đỏ rực (#FF0000)
     dynamic_rgbas = [
-        (0, 255, 0, 255),   # Xanh lá neon chuẩn mẫu OR SUFFER THE CONSEQUENCES
+        (0, 255, 0, 255),   # Xanh lá neon
         (255, 255, 0, 255), # Vàng tươi
         (255, 0, 0, 255),   # Đỏ rực
     ]
@@ -172,22 +179,22 @@ def generate_graphic_subtitles(
                         clean_w = word_text.upper().strip()
                         color = active_rgba if idx == active_idx else primary_rgba
 
-                        # Soft Drop Shadow (Pass 1 + Pass 2)
+                        # Soft Drop Shadow
                         shadow_draw.text(
                             (x_cursor + 5, y1 + 5),
                             clean_w,
                             font=font,
                             fill=(0, 0, 0, 200),
-                            stroke_width=10,
+                            stroke_width=8,
                             stroke_fill=(0, 0, 0, 200),
                         )
-                        # Text chính (Kỹ thuật 2-Pass Stroke: Pass 1 viền đen mập 10px, Pass 2 ruột đặc 100%)
+                        # Text chính (Kỹ thuật 2-Pass Stroke: Pass 1 viền đen mập 8px, Pass 2 ruột đặc 100%)
                         text_draw.text(
                             (x_cursor, y1),
                             clean_w,
                             font=font,
                             fill=(0, 0, 0, 255),
-                            stroke_width=10,
+                            stroke_width=8,
                             stroke_fill=(0, 0, 0, 255),
                         )
                         text_draw.text(
@@ -216,16 +223,16 @@ def generate_graphic_subtitles(
                             clean_w,
                             font=font,
                             fill=(0, 0, 0, 200),
-                            stroke_width=10,
+                            stroke_width=8,
                             stroke_fill=(0, 0, 0, 200),
                         )
-                        # Text chính (Kỹ thuật 2-Pass Stroke: Pass 1 viền đen mập 10px, Pass 2 ruột đặc 100%)
+                        # Text chính (Kỹ thuật 2-Pass Stroke: Pass 1 viền đen mập 8px, Pass 2 ruột đặc 100%)
                         text_draw.text(
                             (x_cursor, y2),
                             clean_w,
                             font=font,
                             fill=(0, 0, 0, 255),
-                            stroke_width=10,
+                            stroke_width=8,
                             stroke_fill=(0, 0, 0, 255),
                         )
                         text_draw.text(
@@ -247,7 +254,7 @@ def generate_graphic_subtitles(
                 # Làm mờ mịn lớp bóng đổ Soft Drop Shadow
                 shadow_img = shadow_img.filter(ImageFilter.GaussianBlur(3))
 
-                # Gộp Lớp Bóng Đổ + Lớp Chữ Chính (Đứng thẳng 0° nghiêng, vô cùng sắc nét và vững chãi)
+                # Gộp Lớp Bóng Đổ + Lớp Chữ Chính (Font Impact CapCut bản first commit)
                 composite = Image.alpha_composite(shadow_img, text_img)
 
                 # Lưu file PNG
@@ -256,5 +263,5 @@ def generate_graphic_subtitles(
                 composite.save(out_png_path, "PNG")
                 graphic_results.append((out_png_path, w_start, w_end))
 
-    logger.info(f"Đã tạo {len(graphic_results)} khung ảnh phụ đề đồ họa Montserrat Bold đứng thẳng 0° tại {tmp_dir}")
+    logger.info(f"Đã tạo {len(graphic_results)} khung ảnh phụ đề đồ họa Impact CapCut (bản first commit) tại {tmp_dir}")
     return graphic_results
