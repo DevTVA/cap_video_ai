@@ -59,6 +59,145 @@ class TranscriptResult:
     full_text: str
 
 
+_MODEL_CACHE = {}
+
+
+def get_whisper_model(
+    model_name: str = "base.en",
+    device: str = "cpu",
+    compute_type: str = "int8",
+):
+    """Lấy hoặc khởi tạo instance WhisperModel từ cache."""
+    key = (model_name, device, compute_type)
+    if key not in _MODEL_CACHE:
+        try:
+            from faster_whisper import WhisperModel
+        except ImportError:
+            raise RuntimeError(
+                "Chưa cài faster-whisper. Chạy: pip install faster-whisper"
+            )
+        logger.info(f"Nạp WhisperModel vào bộ nhớ (Singleton Cache): {model_name} | {device} | {compute_type}")
+        _MODEL_CACHE[key] = WhisperModel(
+            model_name,
+            device=device,
+            compute_type=compute_type,
+        )
+    return _MODEL_CACHE[key]
+
+
+def cleanup_whisper_model():
+    """Dọn dẹp giải phóng bộ nhớ model Whisper."""
+    global _MODEL_CACHE
+    _MODEL_CACHE.clear()
+
+
+import re
+
+
+def _parse_srt_file(srt_path: Path) -> List[SentenceSegment]:
+    """Parse file phụ đề chuẩn SRT thành các SentenceSegment."""
+    content = srt_path.read_text(encoding="utf-8", errors="replace")
+    blocks = content.strip().split("\n\n")
+    segments: List[SentenceSegment] = []
+    tc_pattern = re.compile(r'(\d{2}):(\d{2}):(\d{2})[,.](\d{3})\s*-->\s*(\d{2}):(\d{2}):(\d{2})[,.](\d{3})')
+    for b in blocks:
+        lines = [l.strip() for l in b.splitlines() if l.strip()]
+        if len(lines) >= 2:
+            for l in lines:
+                m = tc_pattern.search(l)
+                if m:
+                    h1, m1, s1, ms1, h2, m2, s2, ms2 = map(int, m.groups())
+                    start = float(h1 * 3600 + m1 * 60 + s1 + ms1 / 1000.0)
+                    end = float(h2 * 3600 + m2 * 60 + s2 + ms2 / 1000.0)
+                    text_idx = lines.index(l) + 1
+                    text = " ".join(lines[text_idx:])
+                    if text.strip():
+                        segments.append(SentenceSegment(
+                            text=text.strip(),
+                            start=start,
+                            end=end,
+                            words=[],
+                        ))
+                    break
+    return segments
+
+
+def _parse_subtitles_txt_file(txt_path: Path) -> List[SentenceSegment]:
+    """Parse file chép lời subtitles.txt dạng [mm:ss] text thành các SentenceSegment."""
+    content = txt_path.read_text(encoding="utf-8", errors="replace")
+    raw_segments = []
+    tc_pattern = re.compile(r'\[(\d{1,2}:\d{2}(?::\d{2})?)\]\s*(.*)')
+    for line in content.splitlines():
+        match = tc_pattern.match(line.strip())
+        if match:
+            tc, text = match.groups()
+            parts = tc.split(':')
+            if len(parts) == 2:
+                sec = float(int(parts[0]) * 60 + int(parts[1]))
+            else:
+                sec = float(int(parts[0]) * 3600 + int(parts[1]) * 60 + int(parts[2]))
+            if text.strip():
+                raw_segments.append((sec, text.strip()))
+
+    segments: List[SentenceSegment] = []
+    for i, (sec, text) in enumerate(raw_segments):
+        if i < len(raw_segments) - 1:
+            end_sec = raw_segments[i + 1][0]
+        else:
+            end_sec = sec + 3.0
+        segments.append(SentenceSegment(
+            text=text,
+            start=sec,
+            end=max(sec + 0.5, end_sec),
+            words=[],
+        ))
+    return segments
+
+
+def try_parse_existing_subtitles(video_path: Path) -> Optional[TranscriptResult]:
+    """Kiểm tra và nạp phụ đề từ file *.srt hoặc subtitles.txt có sẵn trong folder video."""
+    folder = Path(video_path).parent
+
+    # 1. Thử nạp từ file SRT (*.srt)
+    srt_files = list(folder.glob("*.srt"))
+    if srt_files:
+        srt_file = srt_files[0]
+        try:
+            segments = _parse_srt_file(srt_file)
+            if segments:
+                logger.info(f"⚡ Phát hiện file phụ đề SRT có sẵn: {srt_file.name}. Nạp trực tiếp trong 0.01s!")
+                duration = segments[-1].end if segments else 0.0
+                full_text = " ".join(s.text for s in segments)
+                return TranscriptResult(
+                    segments=segments,
+                    language="en",
+                    duration=duration,
+                    full_text=full_text,
+                )
+        except Exception as e:
+            logger.warning(f"Không thể đọc file SRT {srt_file.name}: {e}")
+
+    # 2. Thử nạp từ file subtitles.txt
+    txt_file = folder / "subtitles.txt"
+    if txt_file.exists():
+        try:
+            segments = _parse_subtitles_txt_file(txt_file)
+            if segments:
+                logger.info(f"⚡ Phát hiện file chép lời subtitles.txt có sẵn. Nạp trực tiếp trong 0.01s!")
+                duration = segments[-1].end if segments else 0.0
+                full_text = " ".join(s.text for s in segments)
+                return TranscriptResult(
+                    segments=segments,
+                    language="en",
+                    duration=duration,
+                    full_text=full_text,
+                )
+        except Exception as e:
+            logger.warning(f"Không thể đọc file subtitles.txt: {e}")
+
+    return None
+
+
 def transcribe_video(
     video_path: Path,
     model_name: str = "base.en",
@@ -88,22 +227,15 @@ def transcribe_video(
     if not video_path.exists():
         raise FileNotFoundError(f"Video không tồn tại: {video_path}")
 
-    logger.info(f"Bắt đầu transcribe: {video_path.name}")
-    logger.info(f"  Model: {model_name} | Device: {device} | Compute: {compute_type}")
+    # Ưu tiên kiểm tra và nạp file phụ đề có sẵn trong folder để chạy tức thì (0.01s)
+    existing_result = try_parse_existing_subtitles(video_path)
+    if existing_result:
+        return existing_result
 
-    try:
-        from faster_whisper import WhisperModel
-    except ImportError:
-        raise RuntimeError(
-            "Chưa cài faster-whisper. Chạy: pip install faster-whisper"
-        )
+    logger.info(f"Bắt đầu transcribe bằng Whisper: {video_path.name}")
 
-    # Khởi tạo model
-    model = WhisperModel(
-        model_name,
-        device=device,
-        compute_type=compute_type,
-    )
+    # Lấy model từ Singleton cache
+    model = get_whisper_model(model_name=model_name, device=device, compute_type=compute_type)
 
     # Transcribe — faster-whisper xử lý stream, không load hết vào RAM
     segments_generator, info = model.transcribe(
@@ -121,6 +253,10 @@ def transcribe_video(
 
     all_segments: List[SentenceSegment] = []
     full_text_parts: List[str] = []
+    last_logged_sec = 0.0
+    total_dur = max(1.0, info.duration)
+
+    logger.info(f"  Đang tiến hành bóc băng thoại (Vui lòng chờ CPU bóc {total_dur:.1f}s audio)...")
 
     for segment in segments_generator:
         words: List[WordSegment] = []
@@ -142,6 +278,12 @@ def transcribe_video(
         )
         all_segments.append(sentence)
         full_text_parts.append(segment.text.strip())
+
+        # In log tiến độ bóc băng thoại mỗi khi đi được thêm ~180s (3 phút) nội dung audio
+        if (segment.end - last_logged_sec >= 180.0) or (segment.end >= total_dur - 2.0):
+            percent = min(100, int((segment.end / total_dur) * 100))
+            logger.info(f"  [Whisper Progress] Đã bóc thoại: {segment.end:.1f}s / {total_dur:.1f}s ({percent}%)")
+            last_logged_sec = segment.end
 
     full_text = " ".join(full_text_parts)
 

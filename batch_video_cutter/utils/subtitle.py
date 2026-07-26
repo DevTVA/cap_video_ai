@@ -224,6 +224,7 @@ def generate_ass_subtitle(
             margin_v=margin_v,
             emoji_on_top=True,
             canvas_size=canvas_size,
+            position=position,
         )
         return output_path, graphic_frames
 

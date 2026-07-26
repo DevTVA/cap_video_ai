@@ -17,12 +17,13 @@ from tqdm import tqdm
 
 from .config import AppConfig
 from .core.scanner import scan_videos, VideoInfo
-from .core.transcriber import transcribe_video, format_transcript_for_llm
+from .core.transcriber import transcribe_video, format_transcript_for_llm, cleanup_whisper_model
 from .core.analyzer import analyze_transcript, load_prompt_template, ViralSegment
 from .core.engine import cut_and_render_clip
 from .styles.factory import parse_style_mapping, resolve_style_for_folder
 from .utils.subtitle import create_subtitles_from_transcript
 from .utils.ffmpeg_check import check_ffmpeg
+import sys
 
 
 from .utils.asset_downloader import download_all_assets
@@ -55,29 +56,40 @@ class PipelineOrchestrator:
 
 
         self.state_file = self.bundle_dir / "pipeline_state.json"
-        self.completed_videos: set = self._load_state()
+        self.completed_videos, self.saved_results_list = self._load_state()
+        if self.saved_results_list:
+            self._write_captions_summary(self.saved_results_list)
 
 
-
-
-    def _load_state(self) -> set:
-        """Tải trạng thái video đã hoàn thành để resume."""
+    def _load_state(self) -> tuple:
+        """Tải trạng thái video đã hoàn thành và kết quả clip để resume."""
         if self.state_file.exists():
             try:
                 data = json.loads(self.state_file.read_text(encoding="utf-8"))
-                return set(data.get("completed_videos", []))
+                completed = set(data.get("completed_videos", []))
+                results = data.get("results_list", [])
+                return completed, results
             except Exception as e:
                 logger.warning(f"Không thể đọc file state: {e}")
-        return set()
+        return set(), []
 
-    def _save_state(self, video_path: str):
-        """Lưu trạng thái video hoàn thành."""
+    def _save_state(self, video_path: str, new_results: list = None):
+        """Lưu trạng thái video hoàn thành và tự động cập nhật ngay file all_clip_titles.txt."""
         self.completed_videos.add(video_path)
+        if new_results:
+            new_filenames = {r["filename"] for r in new_results}
+            self.saved_results_list = [r for r in self.saved_results_list if r["filename"] not in new_filenames]
+            self.saved_results_list.extend(new_results)
+
         try:
             self.state_file.write_text(
-                json.dumps({"completed_videos": list(self.completed_videos)}, indent=2),
+                json.dumps({
+                    "completed_videos": list(self.completed_videos),
+                    "results_list": self.saved_results_list,
+                }, indent=2),
                 encoding="utf-8"
             )
+            self._write_captions_summary(self.saved_results_list)
         except Exception as e:
             logger.warning(f"Không thể ghi file state: {e}")
 
@@ -85,13 +97,14 @@ class PipelineOrchestrator:
         self,
         video_info: VideoInfo,
         semaphore: asyncio.Semaphore,
+        transcribe_semaphore: asyncio.Semaphore,
         progress_bar: tqdm,
         results_list: list,
     ):
         """Xử lý 1 video duy nhất với semaphore giới hạn concurrency."""
         async with semaphore:
             str_path = str(video_info.path)
-            first_clip_path = self.bundle_dir / f"{video_info.folder_name}_1.mp4"
+            first_clip_path = self.bundle_dir / f"{video_info.folder_name}_{video_info.video_id}_1.mp4"
             if str_path in self.completed_videos and first_clip_path.exists():
                 logger.info(f"Đã xử lý trước đó và file clip tồn tại, bỏ qua: {video_info.path.name}")
                 progress_bar.update(1)
@@ -101,14 +114,15 @@ class PipelineOrchestrator:
 
 
             try:
-                # 1. Transcribe bằng Whisper (chạy trong executor để không block event loop)
-                loop = asyncio.get_running_loop()
-                transcript = await loop.run_in_executor(
-                    None,
-                    transcribe_video,
-                    video_info.path,
-                    self.config.whisper_model,
-                )
+                # 1. Transcribe bằng Whisper (dùng transcribe_semaphore tuần tự 1 video/lần trên CPU)
+                async with transcribe_semaphore:
+                    loop = asyncio.get_running_loop()
+                    transcript = await loop.run_in_executor(
+                        None,
+                        transcribe_video,
+                        video_info.path,
+                        self.config.whisper_model,
+                    )
 
                 if not transcript.segments:
                     logger.warning(f"Không lấy được transcript cho {video_info.path.name}")
@@ -136,10 +150,11 @@ class PipelineOrchestrator:
                 style = resolve_style_for_folder(video_info.folder_index, self.style_mapping)
                 logger.info(f"Sử dụng {style.name} cho folder [{video_info.folder_name}]")
 
+                video_results = []
                 # 4. Render từng clip
                 for clip_idx, seg in enumerate(segments, 1):
-                    # Tên video dạng: 1_1.mp4, 1_2.mp4
-                    clip_filename = f"{video_info.folder_name}_{clip_idx}.mp4"
+                    # Tên video dạng: 25_Rx5cU2WZK1o_1.mp4 (bao gồm video ID để không bị ghi đè)
+                    clip_filename = f"{video_info.folder_name}_{video_info.video_id}_{clip_idx}.mp4"
                     output_clip_path = self.bundle_dir / clip_filename
 
 
@@ -166,7 +181,7 @@ class PipelineOrchestrator:
                             )
                         )
 
-                        # Render clip bằng FFmpeg với Dynamic Timed HD Color Emoji PNG
+                        # Render clip bằng FFmpeg với Dynamic Timed HD Color Emoji PNG & Top Caption Title
                         await loop.run_in_executor(
                             None,
                             functools.partial(
@@ -178,21 +193,24 @@ class PipelineOrchestrator:
                                 style=style,
                                 subtitle_path=sub_path,
                                 timed_emojis=timed_emojis,
+                                title_text=seg.title_en or seg.title_vi,
                             )
                         )
 
 
                     # Lưu thông tin cho file tiêu đề
-                    results_list.append({
+                    item_info = {
                         "filename": clip_filename,
                         "title": seg.title_en or seg.title_vi,
                         "folder_name": video_info.folder_name,
                         "start_time": seg.start_time,
                         "end_time": seg.end_time,
                         "reason": getattr(seg, "reason", ""),
-                    })
+                    }
+                    video_results.append(item_info)
+                    results_list.append(item_info)
 
-                self._save_state(str_path)
+                self._save_state(str_path, video_results)
                 logger.info(f"Hoàn tất video: {video_info.path.name}")
 
             except Exception as e:
@@ -217,19 +235,28 @@ class PipelineOrchestrator:
             return
 
         semaphore = asyncio.Semaphore(self.config.max_workers)
+        transcribe_semaphore = asyncio.Semaphore(1)  # Giới hạn 1 video transcribe trên CPU tại 1 thời điểm
         results_list: list = []
 
-        logger.info(f"Bắt đầu xử lý {len(videos)} video (Concurreny: {self.config.max_workers})...")
-        with tqdm(total=len(videos), desc="Tiến độ tổng") as pbar:
-            tasks = [
-                self.process_single_video(v, semaphore, pbar, results_list)
-                for v in videos
-            ]
-            await asyncio.gather(*tasks)
+        logger.info(f"Bắt đầu xử lý {len(videos)} video (Concurrency: {self.config.max_workers}, Transcribe CPU: 1)...")
 
-        # 5. Xuất các file tổng hợp tiêu đề vào DUY NHẤT thư mục đóng gói self.bundle_dir
-        self._write_captions_summary(results_list)
-        logger.info(f"==== TẤT CẢ HOÀN TẤT! Tất cả video clip & file txt đã đóng gói tại: {self.bundle_dir} ====")
+        # Điều hướng loguru sink qua tqdm.write để không bị đè chữ trên console
+        logger.remove()
+        logger.add(lambda msg: tqdm.write(msg, end=""), colorize=True)
+
+        try:
+            with tqdm(total=len(videos), desc="Tiến độ tổng") as pbar:
+                tasks = [
+                    self.process_single_video(v, semaphore, transcribe_semaphore, pbar, results_list)
+                    for v in videos
+                ]
+                await asyncio.gather(*tasks)
+
+            # 5. Xuất các file tổng hợp tiêu đề vào DUY NHẤT thư mục đóng gói self.bundle_dir
+            self._write_captions_summary(results_list)
+            logger.info(f"==== TẤT CẢ HOÀN TẤT! Tất cả video clip & file txt đã đóng gói tại: {self.bundle_dir} ====")
+        finally:
+            cleanup_whisper_model()
 
     def _write_captions_summary(self, results_list: list):
         """Ghi duy nhất 1 file all_clip_titles.txt tổng hợp tiêu đề và caption rõ ràng, không trùng lặp."""

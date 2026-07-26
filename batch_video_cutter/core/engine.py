@@ -28,6 +28,7 @@ def cut_and_render_clip(
     timed_emojis: Optional[list] = None,
     audio_volume: float = 1.3,
     outcard_path: Optional[Path] = None,
+    title_text: Optional[str] = None,
 ) -> Path:
     """Cắt và render clip từ video gốc: tăng âm lượng 1.3x và đè outcard.mp4 ở cuối (âm thanh gốc xuống 0 trong phần outcard, chỉ phát âm thanh outcard)."""
     video_path = Path(video_path).resolve()
@@ -54,9 +55,16 @@ def cut_and_render_clip(
     else:
         in_w, in_h = res
 
-    # Lấy filter complex từ style
+    # Lấy filter complex từ style (có nạp title_text nếu phong cách yêu cầu Top Caption)
     sub_str = str(subtitle_path.resolve()) if subtitle_path and subtitle_path.exists() else None
-    filter_complex, output_label = style.get_ffmpeg_filter(in_w, in_h, sub_str)
+    
+    # Kiểm tra xem get_ffmpeg_filter của style có nhận title_text không
+    import inspect
+    sig = inspect.signature(style.get_ffmpeg_filter)
+    if "title_text" in sig.parameters:
+        filter_complex, output_label = style.get_ffmpeg_filter(in_w, in_h, sub_str, title_text)
+    else:
+        filter_complex, output_label = style.get_ffmpeg_filter(in_w, in_h, sub_str)
 
     # Chuyển đổi timestamp
     start_hms = format_timecode_hms(start_time)

@@ -88,6 +88,7 @@ def generate_graphic_subtitles(
     margin_v: int = 180,
     emoji_on_top: bool = True,
     canvas_size: Tuple[int, int] = (1080, 1080),
+    position: str = "bottom",
 ) -> List[Tuple[Path, float, float]]:
     """Tạo danh sách các file ảnh PNG phụ đề đồ họa trong suốt chuẩn font Impact bản first commit (Ruột đặc 100%, Viền đen mập 8px, Soft Drop Shadow, HD Emoji màu)."""
     tmp_dir = Path(tmp_dir)
@@ -176,7 +177,11 @@ def generate_graphic_subtitles(
                 bbox2 = font.getbbox(l2_text) if l2_text else (0, 0, 0, 0)
                 l2_width = bbox2[2] - bbox2[0]
 
-                base_y = canvas_size[1] - margin_v - font_size * (2 if l2_text else 1) - 20
+                if position == "top":
+                    base_y = 45  # Đặt vừa vặn trong dải caption 20% canvas phía trên (từ y=0 đến y=216)
+                else:
+                    base_y = canvas_size[1] - margin_v - font_size * (2 if l2_text else 1) - 20
+
                 y1 = base_y
                 y2 = base_y + font_size + 10
 
