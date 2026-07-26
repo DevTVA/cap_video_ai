@@ -381,8 +381,14 @@ def generate_top_caption_layer(
     words = ensure_caption_8_to_12_words(title_text, fallback_text)
     clean_t = " ".join(words)
 
-    font_path = "C:/Windows/Fonts/arialbd.ttf"
-    font_size = 44
+    # Sử dụng font Montserrat-Bold.ttf (Font chữ in hoa hình học sang trọng chuẩn như ảnh mẫu của user)
+    montserrat_path = Path(__file__).parent.parent / "assets" / "fonts" / "Montserrat-Bold.ttf"
+    if montserrat_path.exists():
+        font_path = str(montserrat_path)
+    else:
+        font_path = "C:/Windows/Fonts/arialbd.ttf"
+
+    font_size = 40
     try:
         font = ImageFont.truetype(font_path, font_size)
     except Exception:
