@@ -96,6 +96,10 @@ class BaseStyle(ABC):
         """Tên font chữ mặc định cho style."""
         return "Impact"
 
+    def get_font_size(self) -> int:
+        """Kích thước font chữ mặc định cho style."""
+        return 85
+
 
     def get_highlight_color(self) -> str:
         """Màu Highlight từ active ("green", "red", "yellow")."""

@@ -158,6 +158,7 @@ class PipelineOrchestrator:
                                 output_path=sub_path,
                                 position=sub_position,
                                 font_name=getattr(style, "get_font_name", lambda: "Montserrat Black")(),
+                                font_size=getattr(style, "get_font_size", lambda: 85)(),
                                 highlight_color_name=getattr(style, "get_highlight_color", lambda: "green")(),
                                 italic=getattr(style, "get_italic_option", lambda: False)(),
                                 add_emojis=True,

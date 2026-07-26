@@ -65,3 +65,7 @@ class Style2(BaseStyle):
     def get_highlight_color(self) -> str:
         return "red"
 
+    def get_font_size(self) -> int:
+        """Kích thước font chữ cho Style 2 (92pt)."""
+        return 92
+
