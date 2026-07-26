@@ -400,21 +400,11 @@ def generate_top_caption_layer(
             curr_y += h + 8
         logger.info(f"Đã tạo PNG Top Caption Dải Nền Vàng (Style 3): {output_png}")
 
-    # 2. Nếu là Canvas 3:4 (1080x1440): Render SINGLE WHITE BADGE BO GÓC CỐ ĐỊNH ĐỘ RỘNG 1000PX (Style 4)
+    # 2. Nếu là Canvas 3:4 (1080x1440): Render SINGLE WHITE BADGE BO GÓC GIÃN ĐẾN LỀ 40PX TRƯỚC KHU XUỐNG DÒNG MỚI (Style 4)
     else:
         # Giới hạn tối đa từ 8 đến 11 từ
         if len(words) > 11:
-            clean_t = " ".join(words[:11])
             words = words[:11]
-
-        # Dòng 1 để trong ngoặc kép "..."
-        first_line_len = min(4, len(words))
-        line1_text = f'"{ " ".join(words[:first_line_len]) }"'
-        line2_text = " ".join(words[first_line_len:])
-        lines = [line1_text]
-        if line2_text:
-            lines.extend(textwrap.wrap(line2_text, width=22))
-        lines = lines[:3]
 
         font_size = 40
         try:
@@ -422,28 +412,66 @@ def generate_top_caption_layer(
         except Exception:
             font = ImageFont.load_default()
 
+        # Max text width per line = Canvas 1080 - Margin 80 (40px 2 bên) - Pad 64 (32px 2 bên) = 936px
+        max_text_w = canvas_size[0] - 80 - 64
+
+        # Ngắt dòng theo pixel width thực tế của Font (giãn tối đa sát lề 40px mới chịu xuống dòng mới)
+        lines = []
+        curr_words = []
+        for w in words:
+            test_words = curr_words + [w]
+            test_str = " ".join(test_words)
+            if len(lines) == 0:
+                test_str = f'"{test_str}"'
+            
+            bbox = font.getbbox(test_str)
+            w_px = bbox[2] - bbox[0]
+            
+            if w_px <= max_text_w:
+                curr_words.append(w)
+            else:
+                if curr_words:
+                    line_text = " ".join(curr_words)
+                    if len(lines) == 0:
+                        line_text = f'"{line_text}"'
+                    lines.append(line_text)
+                    curr_words = [w]
+                else:
+                    lines.append(w)
+                    curr_words = []
+            if len(lines) >= 3:
+                break
+                
+        if curr_words and len(lines) < 3:
+            line_text = " ".join(curr_words)
+            if len(lines) == 0:
+                line_text = f'"{line_text}"'
+            lines.append(line_text)
+
         line_boxes = []
+        max_line_w = 0
         total_text_h = 0
         for line in lines:
             bbox = font.getbbox(line)
             w = bbox[2] - bbox[0]
             h = bbox[3] - bbox[1]
             line_boxes.append((line, w, h))
+            max_line_w = max(max_line_w, w)
             total_text_h += h + 10
         total_text_h -= 10
 
-        # CỐ ĐỊNH ĐỘ RỘNG BADGE 1000PX (Lề trái 40px, Lề phải 40px cố định, không bị co ngắn giãn dài)
-        badge_x1 = 40
-        badge_x2 = 1040
-        badge_w = 1000
-        
         pad_h = 16
+        pad_w = 32
+        badge_w = max_line_w + pad_w * 2
         badge_h = total_text_h + pad_h * 2
 
+        # Lề thụt trái & thụt phải tối thiểu 40px mỗi bên
+        badge_x1 = (canvas_size[0] - badge_w) // 2
         badge_y1 = max(15, (top_area_height - badge_h) // 2)
+        badge_x2 = badge_x1 + badge_w
         badge_y2 = badge_y1 + badge_h
 
-        # Vẽ Single White Rounded Rectangle Badge ĐỘ RỘNG CỐ ĐỊNH 1000PX (radius=18)
+        # Vẽ Single White Rounded Rectangle Badge (radius=18)
         draw.rounded_rectangle([badge_x1, badge_y1, badge_x2, badge_y2], radius=18, fill=(255, 255, 255, 255))
 
         curr_y = badge_y1 + pad_h
@@ -451,7 +479,7 @@ def generate_top_caption_layer(
             text_x = (canvas_size[0] - w) // 2
             draw.text((text_x, curr_y), line, font=font, fill=(0, 0, 0, 255))
             curr_y += h + 10
-        logger.info(f"Đã tạo PNG Top Caption Single White Badge ĐỘ RỘNG CỐ ĐỊNH 1000PX (Style 4): {output_png}")
+        logger.info(f"Đã tạo PNG Top Caption Single White Badge Pixel Wrap (Style 4): {output_png}")
 
     output_png.parent.mkdir(parents=True, exist_ok=True)
     img.save(output_png, "PNG")
