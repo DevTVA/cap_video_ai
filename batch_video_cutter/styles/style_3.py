@@ -1,36 +1,56 @@
-"""Style 3: Chuẩn 100% Zoom & Phụ đề Phong cách 1, tỷ lệ 3:4 (1080x1440), Nền đen, Top Caption chữ TRẮNG rực rỡ.
-
-Video gốc được scale 150% chuẩn xác theo Phong cách 1 (không bị mất bối cảnh video), đặt trên nền đen canvas 3:4 (1080x1440).
-Phần trên (dải 288px) hiển thị tiêu đề Top Caption màu TRẮNG tinh tế, sang trọng (tối đa 8-10 từ, xuống dòng tự động).
-Phụ đề đồ họa & Highlight xanh lá CapCut lấy chuẩn 100% theo Phong cách 1, hiển thị ở phía dưới màn hình (bottom).
+"""Style 3: Layout 3 vùng cân đối (1080x1440 - 3:4 ratio):
+- Vùng trên (240px nền đen): Top Caption Title CHỮ VIẾT HOA 100%, KHÔNG EMOJI (tránh ô vuông), chữ TRẮNG nổi bật, căn giữa dọc 100%.
+- Vùng giữa (960px): Video stream zoom 150% CapCut style đặt ở giữa cân đối (không che khuất nhân vật).
+- Vùng dưới (240px nền đen): Chứa phụ đề đồ họa & active word highlight.
 """
 
+import re
 import textwrap
 from typing import Optional, Tuple
 from .base import BaseStyle, CaptionArea
 
 
+def strip_emojis(text: str) -> str:
+    """Loại bỏ hoàn toàn tất cả biểu tượng emoji để tránh hiển thị ô vuông 🔲 trên font Impact."""
+    if not text:
+        return ""
+    pattern = re.compile(
+        "["
+        "\U00010000-\U0010FFFF"
+        "\u2600-\u27BF"
+        "\u2300-\u23FF"
+        "\u2B00-\u2BFF"
+        "\u2000-\u206F"
+        "\uFE00-\uFE0F"
+        "]+",
+        flags=re.UNICODE,
+    )
+    clean = pattern.sub("", text)
+    clean = re.sub(r"\s+", " ", clean).strip()
+    return clean
+
+
 def format_top_caption_title(title_text: str, max_words: int = 9, max_width: int = 24) -> str:
-    """Tự động giới hạn tiêu đề Top Caption tối đa 8-10 từ và chia thành các dòng ngắn gọn gàng."""
+    """Loại bỏ emoji, viết HOA toàn bộ và chia dòng tiêu đề ngắn gọn (8-9 từ)."""
     if not title_text:
         return ""
-    clean_t = title_text.strip()
+    clean_t = strip_emojis(title_text).upper()
     words = clean_t.split()
     if len(words) > max_words:
         clean_t = " ".join(words[:max_words])
     lines = textwrap.wrap(clean_t, width=max_width)
-    lines = lines[:3]  # Giới hạn tối đa 3 dòng ngắn
+    lines = lines[:3]  # Tối đa 3 dòng ngắn
     return "\n".join(lines)
 
 
 class Style3(BaseStyle):
-    """Phong cách 3: Chuẩn Zoom & Phụ đề Phong cách 1 trên Canvas 3:4 Nền Đen + Top Caption Chữ Trắng."""
+    """Phong cách 3: Layout 3 vùng đối xứng 3:4 (Top black 240px, Middle video 960px, Bottom black 240px)."""
 
-    CAPTION_HEIGHT_RATIO = 0.20  # 20% canvas cho caption (288px)
+    CAPTION_HEIGHT_RATIO = 0.1667  # 240px / 1440px = 1/6
 
     @property
     def name(self) -> str:
-        return "Style 3 - 3:4 Black Background + Top White Caption (CapCut 150% Zoom)"
+        return "Style 3 - 3:4 Balanced Layout + Top White Upper Caption (No Emoji)"
 
     @property
     def aspect_ratio(self) -> str:
@@ -42,7 +62,7 @@ class Style3(BaseStyle):
 
     def get_caption_area(self) -> Optional[CaptionArea]:
         out_w, out_h = self.get_output_resolution()
-        caption_h = int(out_h * self.CAPTION_HEIGHT_RATIO)
+        caption_h = 240
         return CaptionArea(
             x=0,
             y=0,
@@ -59,32 +79,27 @@ class Style3(BaseStyle):
         title_text: Optional[str] = None,
     ) -> Tuple[str, str]:
         out_w, out_h = self.get_output_resolution()  # 1080x1440
-        caption_h = int(out_h * self.CAPTION_HEIGHT_RATIO)  # 288px
-        video_area_h = out_h - caption_h  # 1152px
+        caption_h = 240  # Vùng đen trên cùng (240px)
+        video_area_h = 960  # Vùng video ở giữa (960px)
 
         if input_width <= 0 or input_height <= 0:
             input_width, input_height = 1920, 1080
 
-        # LẤY CHUẨN 100% CÔNG THỨC SCALING ZOOM 150% CỦA PHONG CÁCH 1:
-        # Tính kích thước vừa khung width 1080
-        fit_w = out_w
-        fit_h = int(input_height * (out_w / input_width))
+        # Phóng đại 150% CapCut zoom chuẩn 100% theo Phong cách 1 & 2
+        scale_factor = max((out_w * 1.5) / input_width, (video_area_h * 1.5) / input_height)
+        fg_w = int(input_width * scale_factor)
+        fg_h = int(input_height * scale_factor)
 
-        # Phóng to 150% đúng chuẩn CapCut Phong cách 1
-        fg_w = int(fit_w * 1.5)
-        fg_h = int(fit_h * 1.5)
-
-        overlay_x = (out_w - fg_w) // 2
-        overlay_y = caption_h + (video_area_h - fg_h) // 2
+        crop_x = (fg_w - out_w) // 2
+        crop_y = (fg_h - video_area_h) // 2
 
         filters = [
-            f"color=c=black:s={out_w}x{out_h}:r=30[canvas]",
-            f"[0:v]scale={fg_w}:{fg_h}[fg_scaled]",
-            f"[canvas][fg_scaled]overlay={overlay_x}:{overlay_y}:shortest=1[styled]",
+            f"[0:v]scale={fg_w}:{fg_h},crop={out_w}:{video_area_h}:{crop_x}:{crop_y},"
+            f"pad={out_w}:{out_h}:0:{caption_h}:black[styled]"
         ]
         output_label = "[styled]"
 
-        # Render Top Caption Title CHỮ MÀU TRẮNG sang trọng ở vùng nền đen trên cùng (8-10 từ, xuống dòng tự động)
+        # Render Top Caption Title CHỮ VIẾT HOA 100%, KHÔNG EMOJI, MÀU TRẮNG sang trọng (Căn giữa dọc y=(240-text_h)/2)
         if title_text:
             formatted_title = format_top_caption_title(title_text, max_words=9, max_width=24)
             safe_title = (
@@ -97,7 +112,7 @@ class Style3(BaseStyle):
             font_path = "C\\:/Windows/Fonts/impact.ttf"
             filters.append(
                 f"[styled]drawtext=fontfile='{font_path}':text='{safe_title}':fontcolor=white:"
-                f"fontsize=46:line_spacing=12:x=(w-text_w)/2:y=(288-text_h)/2:shadowcolor=black:shadowx=3:shadowy=3[styled_title]"
+                f"fontsize=46:line_spacing=12:x=(w-text_w)/2:y=(240-text_h)/2:shadowcolor=black:shadowx=3:shadowy=3[styled_title]"
             )
             output_label = "[styled_title]"
 
@@ -113,13 +128,12 @@ class Style3(BaseStyle):
         return "bottom"
 
     def get_highlight_color(self) -> str:
-        """Lấy chuẩn 100% màu Highlight Phong cách 1 ("green")."""
+        """Màu Highlight Phong cách 1 ("green")."""
         return "green"
 
     def get_font_size(self) -> int:
-        """Lấy chuẩn 100% cỡ font Phong cách 1 (85pt)."""
+        """Cỡ font Phong cách 1 (85pt)."""
         return 85
 
     def get_italic_option(self) -> bool:
-        """Lấy chuẩn 100% không nghiêng chữ giống Phong cách 1."""
         return False
