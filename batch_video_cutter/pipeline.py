@@ -327,10 +327,13 @@ class PipelineOrchestrator:
             "",
         ]
 
+        from batch_video_cutter.utils.graphic_subtitle import censor_sensitive_words
+
         for stt, item in enumerate(results_list, 1):
+            clean_title = censor_sensitive_words(item.get('title', ''))
             lines.append(f"[{item['filename']}]")
             lines.append(f"File Output       : {item['filename']}")
-            lines.append(f"Tiêu Đề / Caption  : {item['title']}")
+            lines.append(f"Tiêu Đề / Caption  : {clean_title}")
             lines.append(f"Folder Video Gốc  : {item['folder_name']}")
             lines.append(f"Timestamp Đoạn Cắt : {item['start_time']:.1f}s -> {item['end_time']:.1f}s")
             if item.get("reason"):

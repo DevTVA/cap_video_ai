@@ -316,8 +316,70 @@ def generate_graphic_subtitles(
     return graphic_results
 
 
+CENSOR_DICTIONARY = {
+    r"\bSEX\b": "SE*",
+    r"\bSEXUAL\b": "SE*UAL",
+    r"\bSEXY\b": "SE*Y",
+    r"\bKILL\b": "KI*L",
+    r"\bKILLED\b": "KI*LED",
+    r"\bKILLING\b": "KI*LING",
+    r"\bKILLER\b": "KI*LER",
+    r"\bMURDER\b": "MU*DER",
+    r"\bMURDERED\b": "MU*DERED",
+    r"\bDEATH\b": "DE*TH",
+    r"\bDEAD\b": "DE*D",
+    r"\bDIE\b": "D*E",
+    r"\bDIED\b": "D*ED",
+    r"\bSUICIDE\b": "SU*CIDE",
+    r"\bFUCK\b": "F*CK",
+    r"\bFUCKING\b": "F*CKING",
+    r"\bFUCKED\b": "F*CKED",
+    r"\bSHIT\b": "SH*T",
+    r"\bBITCH\b": "BI*CH",
+    r"\bASS\b": "A*S",
+    r"\bASSHOLE\b": "A*SHOLE",
+    r"\bDICK\b": "DI*K",
+    r"\bPENIS\b": "PE*IS",
+    r"\bVAGINA\b": "VA*INA",
+    r"\bPORN\b": "PO*N",
+    r"\bPORNO\b": "PO*NO",
+    r"\bNUDE\b": "NU*E",
+    r"\bNUDITY\b": "NU*ITY",
+    r"\bNAKED\b": "NA*ED",
+    r"\bRAPE\b": "RA*E",
+    r"\bRAPED\b": "RA*ED",
+    r"\bRAPIST\b": "RA*IST",
+    r"\bABUSE\b": "AB*SE",
+    r"\bABUSED\b": "AB*SED",
+    r"\bSLUT\b": "SL*T",
+    r"\bWHORE\b": "WH*RE",
+    r"\bDRUG\b": "DR*G",
+    r"\bDRUGS\b": "DR*GS",
+    r"\bCOCAINE\b": "CO*AINE",
+    r"\bHEROIN\b": "HE*OIN",
+    r"\bWEED\b": "WE*D",
+    r"\bGUN\b": "G*N",
+    r"\bGUNS\b": "G*NS",
+    r"\bSHOOT\b": "SH*OT",
+    r"\bSHOT\b": "SH*T",
+    r"\bSHOOTING\b": "SH*OTING",
+    r"\bPEDO\b": "PE*O",
+    r"\bPEDOPHILE\b": "PE*OPHILE",
+}
+
+
+def censor_sensitive_words(text: str) -> str:
+    """Thay thế các từ nhạy cảm không chuẩn mực bằng ký tự * (ví dụ SEX -> SE*, KILL -> KI*L)."""
+    if not text:
+        return ""
+    result = text
+    for pattern, replacement in CENSOR_DICTIONARY.items():
+        result = re.sub(pattern, replacement, result, flags=re.IGNORECASE)
+    return result
+
+
 def clean_caption_text(text: str) -> str:
-    """Làm sạch ký tự unicode lạ, emoji, nháy cong để không bao giờ bị ô vuông."""
+    """Làm sạch ký tự unicode lạ, emoji, nháy cong và tự động censor từ nhạy cảm."""
     if not text:
         return ""
     text = text.replace("’", "'").replace("‘", "'").replace("”", '"').replace("“", '"').replace("—", "-")
@@ -334,6 +396,7 @@ def clean_caption_text(text: str) -> str:
     )
     clean = pattern.sub("", text)
     clean = re.sub(r"\s+", " ", clean).strip().upper()
+    clean = censor_sensitive_words(clean)
     return clean
 
 
