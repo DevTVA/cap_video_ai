@@ -400,7 +400,7 @@ def generate_top_caption_layer(
             curr_y += h + 8
         logger.info(f"Đã tạo PNG Top Caption Dải Nền Vàng (Style 3): {output_png}")
 
-    # 2. Nếu là Canvas 3:4 (1080x1440): Render SINGLE WHITE BADGE BO GÓC + THỤT LỀ 2 BÊN + AN TOÀN GÓC BO (Style 4)
+    # 2. Nếu là Canvas 3:4 (1080x1440): Render SINGLE WHITE BADGE BO GÓC CỐ ĐỊNH ĐỘ RỘNG 1000PX (Style 4)
     else:
         # Giới hạn tối đa từ 8 đến 11 từ
         if len(words) > 11:
@@ -408,44 +408,42 @@ def generate_top_caption_layer(
             words = words[:11]
 
         # Dòng 1 để trong ngoặc kép "..."
-        first_line_len = min(3, len(words))
+        first_line_len = min(4, len(words))
         line1_text = f'"{ " ".join(words[:first_line_len]) }"'
         line2_text = " ".join(words[first_line_len:])
         lines = [line1_text]
         if line2_text:
-            lines.extend(textwrap.wrap(line2_text, width=17))
+            lines.extend(textwrap.wrap(line2_text, width=22))
         lines = lines[:3]
 
-        # Dùng font_size=38pt vừa vặn, không bao giờ bị dính viền góc bo
+        font_size = 40
         try:
-            font = ImageFont.truetype(font_path, 38)
+            font = ImageFont.truetype(font_path, font_size)
         except Exception:
             font = ImageFont.load_default()
 
         line_boxes = []
-        max_line_w = 0
         total_text_h = 0
         for line in lines:
             bbox = font.getbbox(line)
             w = bbox[2] - bbox[0]
             h = bbox[3] - bbox[1]
             line_boxes.append((line, w, h))
-            max_line_w = max(max_line_w, w)
             total_text_h += h + 10
         total_text_h -= 10
 
-        # Padding ngang rộng pad_w=48px để chữ không bao giờ chạm góc bo radius=18
+        # CỐ ĐỊNH ĐỘ RỘNG BADGE 1000PX (Lề trái 40px, Lề phải 40px cố định, không bị co ngắn giãn dài)
+        badge_x1 = 40
+        badge_x2 = 1040
+        badge_w = 1000
+        
         pad_h = 16
-        pad_w = 48
-        badge_w = min(max_line_w + pad_w * 2, canvas_size[0] - 80)
         badge_h = total_text_h + pad_h * 2
 
-        badge_x1 = (canvas_size[0] - badge_w) // 2
         badge_y1 = max(15, (top_area_height - badge_h) // 2)
-        badge_x2 = badge_x1 + badge_w
         badge_y2 = badge_y1 + badge_h
 
-        # Vẽ Single White Rounded Rectangle Badge BO VIỀN MƯỢT (radius=18)
+        # Vẽ Single White Rounded Rectangle Badge ĐỘ RỘNG CỐ ĐỊNH 1000PX (radius=18)
         draw.rounded_rectangle([badge_x1, badge_y1, badge_x2, badge_y2], radius=18, fill=(255, 255, 255, 255))
 
         curr_y = badge_y1 + pad_h
@@ -453,7 +451,7 @@ def generate_top_caption_layer(
             text_x = (canvas_size[0] - w) // 2
             draw.text((text_x, curr_y), line, font=font, fill=(0, 0, 0, 255))
             curr_y += h + 10
-        logger.info(f"Đã tạo PNG Top Caption Single White Badge Bo Góc An Toàn (Style 4): {output_png}")
+        logger.info(f"Đã tạo PNG Top Caption Single White Badge ĐỘ RỘNG CỐ ĐỊNH 1000PX (Style 4): {output_png}")
 
     output_png.parent.mkdir(parents=True, exist_ok=True)
     img.save(output_png, "PNG")
