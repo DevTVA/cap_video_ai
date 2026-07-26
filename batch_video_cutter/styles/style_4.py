@@ -1,35 +1,33 @@
-"""Style 4: Scale 150% CapCut-style, tỷ lệ 1:1, nền xanh/vàng, vùng vàng cho caption.
-
-Video gốc được scale 150% lấp đầy vùng xanh (phía dưới).
-Vùng vàng (phía trên) để hiển thị caption.
+"""Style 4: Chuẩn 100% theo mẫu phong cách 4.mp4 gốc (Canvas 3:4 1080x1440):
+- Top Caption: Single Unified White Rounded Badge (Nền Trắng Bo Góc), Chữ Đen Viết Hoa 100%, Trong Ngoặc Kép "..." ở dòng 1.
+- Video Stream: Canvas 3:4 (1080x1440), Video zoom 150% CapCut style đặt cân đối ở trung tâm canvas.
+- Graphic Subtitles: Font Impact CapCut (85pt), Active Word Highlight XANH LÁ ("green"), lề dưới 160px.
 """
 
-from typing import Optional
+from typing import Optional, Tuple
 from .base import BaseStyle, CaptionArea
 
 
 class Style4(BaseStyle):
-    """Phong cách 4: 1:1 nền xanh/vàng với vùng caption vàng và 150% CapCut zoom."""
+    """Phong cách 4: Canvas 3:4 Nền Đen + Top Single White Badge Black Quote Title + Subtitle Highlight Xanh Lá (Chuẩn phong cách 4.mp4)."""
 
-    CAPTION_HEIGHT_RATIO = 0.20  # 20% canvas cho vùng vàng caption
-    GREEN_COLOR = "0x2ECC71"     # Xanh lá
-    YELLOW_COLOR = "0xF1C40F"    # Vàng
+    CAPTION_HEIGHT_RATIO = 0.1944  # 280px / 1440px
 
     @property
     def name(self) -> str:
-        return "Style 4 - 1:1 Green/Yellow Background + Caption (CapCut 150% Zoom)"
+        return "Style 4 - 3:4 Black Background + Top Single White Badge Quote Title + Green Highlight Subtitle (Mẫu phong cách 4.mp4)"
 
     @property
     def aspect_ratio(self) -> str:
-        return "1:1"
+        return "3:4"
 
-    def get_output_resolution(self) -> tuple[int, int]:
-        """Output 1080x1080 (1:1)."""
-        return (1080, 1080)
+    def get_output_resolution(self) -> Tuple[int, int]:
+        """Output 1080x1440 (3:4)."""
+        return (1080, 1440)
 
     def get_caption_area(self) -> Optional[CaptionArea]:
         out_w, out_h = self.get_output_resolution()
-        caption_h = int(out_h * self.CAPTION_HEIGHT_RATIO)
+        caption_h = 280
         return CaptionArea(
             x=0,
             y=0,
@@ -43,37 +41,47 @@ class Style4(BaseStyle):
         input_width: int,
         input_height: int,
         subtitle_path: Optional[str] = None,
-    ) -> str:
-        out_w, out_h = self.get_output_resolution()
-        caption_h = int(out_h * self.CAPTION_HEIGHT_RATIO)
-        video_area_h = out_h - caption_h
+        title_text: Optional[str] = None,
+    ) -> Tuple[str, str]:
+        out_w, out_h = self.get_output_resolution()  # 1080x1440
+        caption_h = 280  # Vùng đen phía trên (280px)
+        video_area_h = 960  # Vùng video ở giữa (960px)
 
-        fit_w = out_w
-        fit_h = int(input_height * (out_w / input_width))
+        if input_width <= 0 or input_height <= 0:
+            input_width, input_height = 1920, 1080
 
-        fg_w = int(fit_w * 1.5)
-        fg_h = int(fit_h * 1.5)
+        # Scale 150% CapCut zoom chuẩn 100% theo Phong cách 1 & 2
+        scale_factor = max((out_w * 1.5) / input_width, (video_area_h * 1.5) / input_height)
+        fg_w = int(input_width * scale_factor)
+        fg_h = int(input_height * scale_factor)
 
-        overlay_x = (out_w - fg_w) // 2
-        overlay_y = caption_h + (video_area_h - fg_h) // 2
+        crop_x = (fg_w - out_w) // 2
+        crop_y = (fg_h - video_area_h) // 2
 
         filters = [
-            f"color={self.YELLOW_COLOR}:s={out_w}x{caption_h}:d=1[yellow_bar]",
-            f"color={self.GREEN_COLOR}:s={out_w}x{video_area_h}:d=1[green_area]",
-            f"[yellow_bar][green_area]vstack[canvas]",
-            f"[0:v]scale={fg_w}:{fg_h}[fg_scaled]",
-            f"[canvas][fg_scaled]overlay={overlay_x}:{overlay_y}:shortest=1[styled]",
+            f"[0:v]scale={fg_w}:{fg_h},crop={out_w}:{video_area_h}:{crop_x}:{crop_y},"
+            f"pad={out_w}:{out_h}:0:{caption_h}:black[styled]"
         ]
+        output_label = "[styled]"
 
         if subtitle_path:
             ass_filter = self.format_ass_filter(subtitle_path)
-            filters.append(f"[styled]{ass_filter}[out]")
+            last_lbl = output_label.strip("[]")
+            filters.append(f"[{last_lbl}]{ass_filter}[out]")
             output_label = "[out]"
-        else:
-            output_label = "[styled]"
-
 
         return ";".join(filters), output_label
 
     def get_subtitle_position(self) -> str:
-        return "top"
+        return "bottom"
+
+    def get_highlight_color(self) -> str:
+        """Màu Highlight MÀU XANH LÁ ("green") chuẩn 100% theo mẫu phong cách 4.mp4."""
+        return "green"
+
+    def get_font_size(self) -> int:
+        """Cỡ font 85pt chuẩn CapCut."""
+        return 85
+
+    def get_italic_option(self) -> bool:
+        return False
