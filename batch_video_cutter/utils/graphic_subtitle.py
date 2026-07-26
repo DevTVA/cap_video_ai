@@ -400,14 +400,20 @@ def generate_top_caption_layer(
             curr_y += h + 8
         logger.info(f"Đã tạo PNG Top Caption Dải Nền Vàng (Style 3): {output_png}")
 
-    # 2. Nếu là Canvas 3:4 (1080x1440): Render SINGLE WHITE BADGE CHỮ ĐEN NGOẶC KÉP chuẩn mẫu phong cách 4.mp4 gốc
+    # 2. Nếu là Canvas 3:4 (1080x1440): Render SINGLE WHITE BADGE BO GÓC + THỤT LỀ 2 BÊN 40PX (Style 4)
     else:
+        # Giới hạn tối đa từ 8 đến 11 từ
+        if len(words) > 11:
+            clean_t = " ".join(words[:11])
+
+        # Dòng 1 để trong ngoặc kép "..."
         first_line_len = min(5, len(words))
         line1_text = f'"{ " ".join(words[:first_line_len]) }"'
         line2_text = " ".join(words[first_line_len:])
         lines = [line1_text]
         if line2_text:
-            lines.append(line2_text)
+            lines.extend(textwrap.wrap(line2_text, width=22))
+        lines = lines[:3]
 
         line_boxes = []
         max_line_w = 0
@@ -422,24 +428,25 @@ def generate_top_caption_layer(
         total_text_h -= 10
 
         pad_h = 16
-        pad_w = 32
-        badge_w = max_line_w + pad_w * 2
+        pad_w = 28
+        # Thụt lề trái & thụt lề phải ít nhất 40px mỗi bên (canvas 1080 -> max width 1000px)
+        badge_w = min(max_line_w + pad_w * 2, canvas_size[0] - 80)
         badge_h = total_text_h + pad_h * 2
 
         badge_x1 = (canvas_size[0] - badge_w) // 2
-        badge_y1 = max(10, (top_area_height - badge_h) // 2)
+        badge_y1 = max(15, (top_area_height - badge_h) // 2)
         badge_x2 = badge_x1 + badge_w
         badge_y2 = badge_y1 + badge_h
 
-        # Vẽ Single White Rounded Rectangle Badge bao bọc các dòng chữ (Giống 100% phong cách 4.mp4)
-        draw.rounded_rectangle([badge_x1, badge_y1, badge_x2, badge_y2], radius=16, fill=(255, 255, 255, 255))
+        # Vẽ Single White Rounded Rectangle Badge BO VIỀN MƯỢT (radius=18)
+        draw.rounded_rectangle([badge_x1, badge_y1, badge_x2, badge_y2], radius=18, fill=(255, 255, 255, 255))
 
         curr_y = badge_y1 + pad_h
         for line, w, h in line_boxes:
             text_x = (canvas_size[0] - w) // 2
             draw.text((text_x, curr_y), line, font=font, fill=(0, 0, 0, 255))
             curr_y += h + 10
-        logger.info(f"Đã tạo PNG Top Caption Single White Badge (Style 4): {output_png}")
+        logger.info(f"Đã tạo PNG Top Caption Single White Badge Bo Góc Thụt Lề 40px (Style 4): {output_png}")
 
     output_png.parent.mkdir(parents=True, exist_ok=True)
     img.save(output_png, "PNG")
