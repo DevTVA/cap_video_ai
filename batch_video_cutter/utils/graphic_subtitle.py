@@ -465,156 +465,167 @@ def generate_top_caption_layer(
     img = Image.new("RGBA", canvas_size, (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
 
-    # 1. Nếu là Canvas 1:1 (1080x1080): Render Dải Nền Vàng + Chữ Đen Montserrat-Bold 2 Dòng Thụt Lề (Phong cách 3)
+def format_top_caption_lines(words: list, font: ImageFont.FreeTypeFont, max_text_w: int) -> list:
+    """Tách các từ thành 1, 2 hoặc 3 dòng:
+    - Dòng 1: Dồn tối đa từ cho sát mốc lề max_text_w.
+    - Dòng 2 & 3: Nếu phần từ còn lại tràn mốc max_text_w thì tự động tách thành 3 dòng cân đối kích thước.
+    """
+    if not words:
+        return []
+
+    curr_l1 = []
+    split_idx1 = 0
+    for idx, w in enumerate(words):
+        test_str = f'"{" ".join(curr_l1 + [w])}'
+        w_px = font.getbbox(test_str)[2] - font.getbbox(test_str)[0]
+        if w_px <= max_text_w:
+            curr_l1.append(w)
+            split_idx1 = idx + 1
+        else:
+            break
+
+    if split_idx1 == 0:
+        split_idx1 = 1
+
+    l1_words = words[:split_idx1]
+    rem_words = words[split_idx1:]
+
+    if not rem_words:
+        return [f'"{" ".join(l1_words)}"']
+
+    line1_text = f'"{" ".join(l1_words)}'
+
+    test_rem_str = f'{" ".join(rem_words)}"'
+    rem_w_px = font.getbbox(test_rem_str)[2] - font.getbbox(test_rem_str)[0]
+
+    if rem_w_px <= max_text_w:
+        line2_text = test_rem_str
+        return [line1_text, line2_text]
+
+    # Nếu phần từ còn lại vượt quá max_text_w -> Tách làm Dòng 2 và Dòng 3 cân đối kích thước
+    split_idx2 = max(1, len(rem_words) // 2)
+    l2_words = rem_words[:split_idx2]
+    l3_words = rem_words[split_idx2:]
+
+    line2_text = f'{" ".join(l2_words)}'
+    line3_text = f'{" ".join(l3_words)}"'
+
+    return [line1_text, line2_text, line3_text]
+
+
+def generate_top_caption_layer(
+    title_text: str,
+    output_png: Path,
+    canvas_size: Tuple[int, int] = (1080, 1440),
+    top_area_height: int = 280,
+    fallback_text: str = "",
+) -> Optional[Path]:
+    """Tạo file PNG chứa Top Caption Chữ ĐEN Bo Viền TRẮNG Nền ĐEN cho Canvas 3:4 và Nền Vàng cho Canvas 1:1 (Hỗ trợ 1-3 dòng cân đối)."""
+    if not title_text:
+        return None
+    
+    # 1. Chạy vòng lặp đảm bảo 100% số từ từ 8 đến 12 từ
+    words = ensure_caption_8_to_12_words(title_text, fallback_text)
+
+    # Sử dụng font Montserrat-Bold.ttf
+    montserrat_path = Path(__file__).parent.parent / "assets" / "fonts" / "Montserrat-Bold.ttf"
+    if montserrat_path.exists():
+        font_path = str(montserrat_path)
+    else:
+        font_path = "C:/Windows/Fonts/arialbd.ttf"
+
+    font_size = 40
+    try:
+        font = ImageFont.truetype(font_path, font_size)
+    except Exception:
+        try:
+            font = ImageFont.truetype("C:/Windows/Fonts/impact.ttf", font_size)
+        except Exception:
+            font = ImageFont.load_default()
+
+    img = Image.new("RGBA", canvas_size, (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+
+    # 1. Nếu là Canvas 1:1 (1080x1080): Render Dải Nền Vàng + Chữ Đen Montserrat-Bold 1-3 Dòng Cân Đối (Phong cách 3)
     if canvas_size[0] == 1080 and canvas_size[1] == 1080:
         draw.rectangle([0, 0, canvas_size[0], top_area_height], fill=(255, 255, 0, 255))
 
         margin_x = 40
         max_text_w = canvas_size[0] - margin_x * 2  # 1000px
 
-        curr_l1 = []
-        split_idx = 0
-        for idx, w in enumerate(words):
-            test_words = curr_l1 + [w]
-            test_str = f'"{" ".join(test_words)}'
-            w_px = font.getbbox(test_str)[2] - font.getbbox(test_str)[0]
-            if w_px <= max_text_w:
-                curr_l1.append(w)
-                split_idx = idx + 1
-            else:
-                break
+        lines = format_top_caption_lines(words, font, max_text_w)
+        bboxes = [font.getbbox(l) for l in lines]
+        widths = [b[2] - b[0] for b in bboxes]
+        heights = [b[3] - b[1] for b in bboxes]
 
-        if split_idx == 0:
-            split_idx = 1
+        line_gap = 6 if len(lines) == 3 else 10
+        total_h = sum(heights) + line_gap * (len(lines) - 1)
+        start_y = max(8, (top_area_height - total_h) // 2)
 
-        if split_idx < len(words):
-            line1_text = f'"{" ".join(words[:split_idx])}'
-            line2_text = f'{" ".join(words[split_idx:])}"'
-        else:
-            line1_text = f'"{" ".join(words)}"'
-            line2_text = ""
+        curr_y = start_y
+        for i, line_str in enumerate(lines):
+            w = widths[i]
+            h = heights[i]
+            x_pos = (canvas_size[0] - w) // 2
+            draw.text((x_pos, curr_y), line_str, font=font, fill=(0, 0, 0, 255))
+            curr_y += h + line_gap
 
-        bbox1 = font.getbbox(line1_text)
-        w1, h1 = bbox1[2] - bbox1[0], bbox1[3] - bbox1[1]
+        logger.info(f"Đã tạo PNG Top Caption Dải Nền Vàng Chữ Đen Montserrat-Bold ({len(lines)} Dòng - Style 3): {output_png}")
 
-        if line2_text:
-            bbox2 = font.getbbox(line2_text)
-            w2, h2 = bbox2[2] - bbox2[0], bbox2[3] - bbox2[1]
-
-            line_gap = 10
-            total_h = h1 + h2 + line_gap
-            start_y = max(10, (top_area_height - total_h) // 2)
-
-            text1_x = (canvas_size[0] - w1) // 2
-            text1_y = start_y
-            draw.text((text1_x, text1_y), line1_text, font=font, fill=(0, 0, 0, 255))
-
-            text2_x = (canvas_size[0] - w2) // 2
-            text2_y = text1_y + h1 + line_gap
-            draw.text((text2_x, text2_y), line2_text, font=font, fill=(0, 0, 0, 255))
-        else:
-            start_y = max(10, (top_area_height - h1) // 2)
-            text1_x = (canvas_size[0] - w1) // 2
-            text1_y = start_y
-            draw.text((text1_x, text1_y), line1_text, font=font, fill=(0, 0, 0, 255))
-
-        logger.info(f"Đã tạo PNG Top Caption Dải Nền Vàng Chữ Đen Montserrat-Bold (Style 3): {output_png}")
-
-    # 2. Nếu là Canvas 3:4 (1080x1440): Render 2-LINE CONTOUR WHITE BADGE BO VIỀN ÔM THEO TỪNG DÒNG (Style 4)
+    # 2. Nếu là Canvas 3:4 (1080x1440): Render 1-3 LINE CONTOUR WHITE BADGE BO VIỀN ÔM THEO TỪNG DÒNG (Style 4)
     else:
-        font_size = 40
-        try:
-            font = ImageFont.truetype(font_path, font_size)
-        except Exception:
-            font = ImageFont.load_default()
-
         margin_x = 40
         pad_w_l1 = 20
-        pad_w_l2 = 32
-        pad_h = 16
+        pad_w_other = 30
+        pad_h = 14
         radius = 18
 
-        # Khung nền trắng Dòng 1 cố định lề 40px 2 bên => Rộng đúng (1080 - 40*2) = 1000px
-        # Giới hạn chiều rộng chữ Dòng 1 = 1000 - 20*2 = 960px
         max_text_w_l1 = canvas_size[0] - margin_x * 2 - pad_w_l1 * 2  # 960px
 
-        # Dồn từ vào Dòng 1 tối đa cho đến khi sát mốc 960px
-        curr_l1 = []
-        split_idx = 0
-        for idx, w in enumerate(words):
-            test_words = curr_l1 + [w]
-            test_str = f'"{" ".join(test_words)}'
-            w_px = font.getbbox(test_str)[2] - font.getbbox(test_str)[0]
-            if w_px <= max_text_w_l1:
-                curr_l1.append(w)
-                split_idx = idx + 1
-            else:
-                break
+        lines = format_top_caption_lines(words, font, max_text_w_l1)
+        bboxes = [font.getbbox(l) for l in lines]
+        widths = [b[2] - b[0] for b in bboxes]
+        heights = [b[3] - b[1] for b in bboxes]
 
-        if split_idx == 0 or split_idx >= len(words):
-            split_idx = max(1, len(words) // 2)
-
-        line1_text = f'"{" ".join(words[:split_idx])}'
-        line2_text = f'{" ".join(words[split_idx:])}"' if split_idx < len(words) else ""
-
-        # Đảm bảo câu 1 dòng duy nhất có dấu ngoặc kép kết thúc
-        if split_idx >= len(words):
-            line1_text = f'"{" ".join(words)}"'
-            line2_text = ""
-
-        bbox1 = font.getbbox(line1_text)
-        w1, h1 = bbox1[2] - bbox1[0], bbox1[3] - bbox1[1]
-
-        # KHUNG BO VIỀN DÒNG 1: Cố định tuyệt đối x1=40px, x2=1040px
+        # Khung Dòng 1: Full width lề 40px (1000px). Các dòng sau contour theo chữ
         box1_x1 = margin_x
         box1_x2 = canvas_size[0] - margin_x
-        box1_h = h1 + pad_h * 2
+        box1_h = heights[0] + pad_h * 2
 
-        if line2_text:
-            bbox2 = font.getbbox(line2_text)
-            w2, h2 = bbox2[2] - bbox2[0], bbox2[3] - bbox2[1]
-            box2_w = w2 + pad_w_l2 * 2
-            box2_h = h2 + pad_h * 2
-            box2_x1 = (canvas_size[0] - box2_w) // 2
-            box2_x2 = box2_x1 + box2_w
+        boxes = [(box1_x1, box1_x2, box1_h)]
 
-            total_h = box1_h + box2_h - 8
-            start_y = max(15, (top_area_height - total_h) // 2)
+        for i in range(1, len(lines)):
+            bw = widths[i] + pad_w_other * 2
+            bh = heights[i] + pad_h * 2
+            bx1 = (canvas_size[0] - bw) // 2
+            bx2 = bx1 + bw
+            boxes.append((bx1, bx2, bh))
 
-            box1_y1 = start_y
-            box1_y2 = box1_y1 + box1_h
+        total_h = sum(b[2] for b in boxes) - 8 * (len(boxes) - 1)
+        start_y = max(10, (top_area_height - total_h) // 2)
 
-            box2_y1 = box1_y2 - 8
-            box2_y2 = box2_y1 + box2_h
+        curr_y = start_y
+        for i, line_str in enumerate(lines):
+            bx1, bx2, bh = boxes[i]
+            by1 = curr_y
+            by2 = by1 + bh
 
-            # 1. Vẽ Khung Trắng Bo Góc Cho Line 1 (Full Width lề 40px) & Line 2 (Contour theo độ rộng chữ)
-            draw.rounded_rectangle([box1_x1, box1_y1, box1_x2, box1_y2], radius=radius, fill=(255, 255, 255, 255))
-            draw.rounded_rectangle([box2_x1, box2_y1, box2_x2, box2_y2], radius=radius, fill=(255, 255, 255, 255))
+            draw.rounded_rectangle([bx1, by1, bx2, by2], radius=radius, fill=(255, 255, 255, 255))
 
-            # Fill vùng ghép nối giữa Dòng 1 và Dòng 2
-            min_x1 = box2_x1 + radius
-            max_x2 = box2_x2 - radius
-            if max_x2 > min_x1:
-                draw.rectangle([min_x1, box1_y2 - 10, max_x2, box2_y1 + 10], fill=(255, 255, 255, 255))
+            if i > 0:
+                prev_bx1, prev_bx2, _ = boxes[i - 1]
+                min_x = max(bx1, prev_bx1) + radius
+                max_x = min(bx2, prev_bx2) - radius
+                if max_x > min_x:
+                    draw.rectangle([min_x, by1 - 8, max_x, by1 + 8], fill=(255, 255, 255, 255))
 
-            # 2. Vẽ Chữ Đen Căn Giữa
-            text1_x = (canvas_size[0] - w1) // 2
-            text1_y = box1_y1 + pad_h
-            draw.text((text1_x, text1_y), line1_text, font=font, fill=(0, 0, 0, 255))
+            text_x = (canvas_size[0] - widths[i]) // 2
+            text_y = by1 + pad_h
+            draw.text((text_x, text_y), line_str, font=font, fill=(0, 0, 0, 255))
 
-            text2_x = (canvas_size[0] - w2) // 2
-            text2_y = box2_y1 + pad_h
-            draw.text((text2_x, text2_y), line2_text, font=font, fill=(0, 0, 0, 255))
-        else:
-            start_y = max(15, (top_area_height - box1_h) // 2)
-            box1_y1 = start_y
-            box1_y2 = box1_y1 + box1_h
-            draw.rounded_rectangle([box1_x1, box1_y1, box1_x2, box1_y2], radius=radius, fill=(255, 255, 255, 255))
-            text1_x = (canvas_size[0] - w1) // 2
-            text1_y = box1_y1 + pad_h
-            draw.text((text1_x, text1_y), line1_text, font=font, fill=(0, 0, 0, 255))
+            curr_y = by2 - 8
 
-        logger.info(f"Đã tạo PNG Top Caption Line 1 Flush Edge Full Width & Line 2 Contour White Badge (Style 4): {output_png}")
+        logger.info(f"Đã tạo PNG Top Caption White Badge ({len(lines)} Dòng - Style 4): {output_png}")
 
     output_png.parent.mkdir(parents=True, exist_ok=True)
     img.save(output_png, "PNG")
