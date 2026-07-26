@@ -297,16 +297,28 @@ def generate_graphic_subtitles(
                 composite.save(out_png_path, "PNG")
                 graphic_results.append((out_png_path, w_start, w_end))
 
-    # Khử đè thời gian giữa các khung phụ đề (Timing overlap sanitization 100% chống đè chữ)
+    # Khử đè thời gian & Gộp các khung chớp nháy quá ngắn khi nhân vật nói nhanh (Chống chớp nháy 100%)
     if graphic_results:
         graphic_results.sort(key=lambda x: x[1])
+        merged = []
+        for p, s, e in graphic_results:
+            # Nếu thời lượng quá ngắn (< 0.35s) và có khung trước đó gần kề:
+            if merged and (s - merged[-1][2] < 0.05) and (merged[-1][2] - merged[-1][1] < 0.35):
+                # Nối dài thời lượng khung trước đó lên
+                prev_p, prev_s, prev_e = merged[-1]
+                merged[-1] = (prev_p, prev_s, max(e, prev_s + 0.35))
+            else:
+                display_end = max(e, s + 0.35)
+                merged.append((p, s, display_end))
+
+        # Đảm bảo khung sau đè hợp lý không trùng khớp
         sanitized = []
-        for i in range(len(graphic_results)):
-            p, s, e = graphic_results[i]
-            if i < len(graphic_results) - 1:
-                next_s = graphic_results[i + 1][1]
+        for i in range(len(merged)):
+            p, s, e = merged[i]
+            if i < len(merged) - 1:
+                next_s = merged[i + 1][1]
                 e = min(e, next_s - 0.02)
-            if e > s + 0.01:
+            if e > s + 0.02:
                 sanitized.append((p, s, e))
         graphic_results = sanitized
 
@@ -341,7 +353,7 @@ def generate_top_caption_layer(
     canvas_size: Tuple[int, int] = (1080, 1440),
     top_area_height: int = 280,
 ) -> Optional[Path]:
-    """Tạo file PNG chứa Top Caption dạng Badge Nền Trắng Bo Góc + Chữ Đen Viết Hoa giống 100% mẫu ảnh."""
+    """Tạo file PNG chứa Top Caption Chữ ĐEN Bo Viền TRẮNG Nền ĐEN cho Canvas 3:4 và Nền Vàng cho Canvas 1:1."""
     if not title_text:
         return None
     clean_t = clean_caption_text(title_text)
@@ -351,7 +363,7 @@ def generate_top_caption_layer(
         clean_t = " ".join(words[:9])
 
     font_path = "C:/Windows/Fonts/arialbd.ttf"
-    font_size = 40
+    font_size = 44
     try:
         font = ImageFont.truetype(font_path, font_size)
     except Exception:
@@ -364,7 +376,7 @@ def generate_top_caption_layer(
     img = Image.new("RGBA", canvas_size, (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
 
-    # 1. Nếu là Phong cách 3 (Square 1080x1080): Render Dải Nền Vàng + Chữ Đen Ngoặc Kép
+    # 1. Nếu là Canvas 1:1 (1080x1080): Render Dải Nền Vàng + Chữ Đen Ngoặc Kép (Phong cách 3)
     if canvas_size[0] == 1080 and canvas_size[1] == 1080:
         formatted = f'"{clean_t}"'
         lines = textwrap.wrap(formatted, width=28)[:2]
@@ -388,47 +400,40 @@ def generate_top_caption_layer(
             curr_y += h + 8
         logger.info(f"Đã tạo PNG Top Caption Dải Nền Vàng (Style 3): {output_png}")
 
-    # 2. Nếu là Phong cách 4 (3:4 1080x1440): Render SINGLE UNIFIED WHITE BADGE chuẩn mẫu phong cách 4.mp4 gốc
+    # 2. Nếu là Canvas 3:4 (1080x1440): Render Top Caption NỀN ĐEN + CHỮ ĐEN BO VIỀN TRẮNG
     else:
-        # Dòng 1 để trong ngoặc kép
-        first_line_len = min(5, len(words))
-        line1_text = f'"{ " ".join(words[:first_line_len]) }"'
-        line2_text = " ".join(words[first_line_len:])
-        lines = [line1_text]
-        if line2_text:
-            lines.append(line2_text)
+        formatted = f'"{clean_t}"'
+        lines = textwrap.wrap(formatted, width=24)[:3]
+
+        # Vẽ dải nền ĐEN ở vùng top_area_height (280px)
+        draw.rectangle([0, 0, canvas_size[0], top_area_height], fill=(0, 0, 0, 255))
 
         line_boxes = []
-        max_line_w = 0
         total_text_h = 0
         for line in lines:
             bbox = font.getbbox(line)
             w = bbox[2] - bbox[0]
             h = bbox[3] - bbox[1]
             line_boxes.append((line, w, h))
-            max_line_w = max(max_line_w, w)
-            total_text_h += h + 10
-        total_text_h -= 10
+            total_text_h += h + 12
+        total_text_h -= 12
 
-        pad_h = 14
-        pad_w = 28
-        badge_w = max_line_w + pad_w * 2
-        badge_h = total_text_h + pad_h * 2
+        start_y = max(10, (top_area_height - total_text_h) // 2)
 
-        badge_x1 = (canvas_size[0] - badge_w) // 2
-        badge_y1 = max(10, (top_area_height - badge_h) // 2)
-        badge_x2 = badge_x1 + badge_w
-        badge_y2 = badge_y1 + badge_h
-
-        # Vẽ Single Unified White Badge Bo Góc
-        draw.rounded_rectangle([badge_x1, badge_y1, badge_x2, badge_y2], radius=14, fill=(255, 255, 255, 255))
-
-        curr_y = badge_y1 + pad_h
+        curr_y = start_y
         for line, w, h in line_boxes:
             text_x = (canvas_size[0] - w) // 2
-            draw.text((text_x, curr_y), line, font=font, fill=(0, 0, 0, 255))
-            curr_y += h + 10
-        logger.info(f"Đã tạo PNG Top Caption Single White Badge (Style 4): {output_png}")
+            # Vẽ Chữ ĐEN bo viền TRẮNG nổi bật trên Nền ĐEN
+            draw.text(
+                (text_x, curr_y),
+                line,
+                font=font,
+                fill=(0, 0, 0, 255),
+                stroke_width=6,
+                stroke_fill=(255, 255, 255, 255),
+            )
+            curr_y += h + 12
+        logger.info(f"Đã tạo PNG Top Caption Nền Đen Chữ Đen Viền Trắng (3:4 Canvas): {output_png}")
 
     output_png.parent.mkdir(parents=True, exist_ok=True)
     img.save(output_png, "PNG")
