@@ -1,7 +1,7 @@
 """Graphic Subtitle Layer Generator using Pillow.
 
-Renders subtitle text with Luckiest Guy / Titan One viral fonts, 12° Italic Slant,
-soft 3D drop shadow, thick 7px black stroke, 3-color active word highlighting,
+Renders subtitle text with Montserrat Bold modern sans-serif font, straight 0° upright orientation,
+soft 3D drop shadow, thick 7px black stroke, 3-color active word highlighting (Neon Green/Yellow/Red),
 and pastes HD Color 3D PNG Emojis directly to the right of the period on a transparent PNG layer.
 Ensures 100% frame-accurate timing and exact pixel positioning.
 """
@@ -37,16 +37,16 @@ def _hex_to_rgba(color_str: str) -> Tuple[int, int, int, int]:
 
 
 def _get_font(font_name: str, font_size: int) -> ImageFont.FreeTypeFont:
-    """Tải chính xác font TTF CapCut viral (Luckiest Guy / Titan One / Montserrat) từ assets/fonts."""
+    """Tải chính xác font TTF Montserrat Bold hiện đại từ assets/fonts."""
     fonts_dir = Path(__file__).parent.parent / "assets" / "fonts"
     clean_target = font_name.replace(" ", "").replace("-", "").replace("_", "").lower()
 
-    # 1. Danh sách ưu tiên font CapCut viral
+    # 1. Danh sách ưu tiên font Montserrat Bold hiện đại đứng thẳng
     primary_paths = [
+        fonts_dir / "Montserrat-Bold.ttf",
+        fonts_dir / "Fredoka-Bold.ttf",
         fonts_dir / "LuckiestGuy-Regular.ttf",
         fonts_dir / "TitanOne-Regular.ttf",
-        fonts_dir / "Fredoka-Bold.ttf",
-        fonts_dir / "Montserrat-Bold.ttf",
         fonts_dir / "Bangers-Regular.ttf",
         Path("C:/Windows/Fonts/impact.ttf"),
     ]
@@ -74,26 +74,26 @@ def _get_font(font_name: str, font_size: int) -> ImageFont.FreeTypeFont:
 def generate_graphic_subtitles(
     subtitle_lines: List[SubtitleLine],
     tmp_dir: Path,
-    font_name: str = "LuckiestGuy",
-    font_size: int = 85,
+    font_name: str = "Montserrat",
+    font_size: int = 80,
     primary_color: str = "&H00FFFFFF",
     highlight_color_name: str = "dynamic",
     margin_v: int = 180,
     emoji_on_top: bool = True,
     canvas_size: Tuple[int, int] = (1080, 1080),
 ) -> List[Tuple[Path, float, float]]:
-    """Tạo danh sách các file ảnh PNG phụ đề đồ họa trong suốt chuẩn mẫu "BUT GEORGE" (Slant 12°, Soft Drop Shadow, HD Emoji màu)."""
+    """Tạo danh sách các file ảnh PNG phụ đề đồ họa trong suốt chuẩn mẫu "OR SUFFER THE CONSEQUENCES" (Montserrat Bold, Stand 0°, Soft Drop Shadow, HD Emoji màu)."""
     tmp_dir = Path(tmp_dir)
     tmp_dir.mkdir(parents=True, exist_ok=True)
 
     font = _get_font(font_name, font_size)
-    primary_rgba = _hex_to_rgba(primary_color)
+    primary_rgba = (255, 255, 255, 255) # Trắng Tươi cho từ chưa active
     stroke_rgba = (0, 0, 0, 255) # Viền đen mập 7px
 
-    # Gam màu Highlight CapCut rực rỡ: Vàng tươi (#FFFF00), Xanh lá neon (#00FF00), Đỏ rực (#FF0000)
+    # Gam màu Highlight nổi bật: Xanh lá neon (#00FF00), Vàng tươi (#FFFF00), Đỏ rực (#FF0000)
     dynamic_rgbas = [
-        (255, 255, 0, 255), # Vàng tươi chuẩn BUT GEORGE
-        (0, 255, 0, 255),   # Xanh lá neon
+        (0, 255, 0, 255),   # Xanh lá neon chuẩn mẫu OR SUFFER THE CONSEQUENCES
+        (255, 255, 0, 255), # Vàng tươi
         (255, 0, 0, 255),   # Đỏ rực
     ]
     color_counter = 0
@@ -233,16 +233,8 @@ def generate_graphic_subtitles(
                 # Làm mờ mịn lớp bóng đổ Soft Drop Shadow
                 shadow_img = shadow_img.filter(ImageFilter.GaussianBlur(3))
 
-                # Gộp Lớp Bóng Đổ + Lớp Chữ Chính
+                # Gộp Lớp Bóng Đổ + Lớp Chữ Chính (Đứng thẳng 0° nghiêng, vô cùng sắc nét và vững chãi)
                 composite = Image.alpha_composite(shadow_img, text_img)
-
-                # Áp dụng Ma trận Affine Slant nghiêng 12 độ sinh động chuẩn mẫu "BUT GEORGE"
-                composite = composite.transform(
-                    canvas_size,
-                    Image.Transform.AFFINE,
-                    (1, -0.15, 120, 0, 1, 0),
-                    resample=Image.Resampling.BILINEAR,
-                )
 
                 # Lưu file PNG
                 frame_count += 1
@@ -250,5 +242,5 @@ def generate_graphic_subtitles(
                 composite.save(out_png_path, "PNG")
                 graphic_results.append((out_png_path, w_start, w_end))
 
-    logger.info(f"Đã tạo {len(graphic_results)} khung ảnh phụ đề đồ họa Luckiest Guy Slant 12° tại {tmp_dir}")
+    logger.info(f"Đã tạo {len(graphic_results)} khung ảnh phụ đề đồ họa Montserrat Bold đứng thẳng 0° tại {tmp_dir}")
     return graphic_results

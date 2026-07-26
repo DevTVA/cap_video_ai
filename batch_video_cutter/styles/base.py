@@ -94,7 +94,7 @@ class BaseStyle(ABC):
 
     def get_font_name(self) -> str:
         """Tên font chữ mặc định cho style."""
-        return "LuckiestGuy"
+        return "Montserrat"
 
 
     def get_highlight_color(self) -> str:
