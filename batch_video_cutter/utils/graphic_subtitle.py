@@ -172,23 +172,30 @@ def generate_graphic_subtitles(
                         clean_w = word_text.upper().strip()
                         color = active_rgba if idx == active_idx else primary_rgba
 
-                        # Soft Drop Shadow
+                        # Soft Drop Shadow (Pass 1 + Pass 2)
                         shadow_draw.text(
                             (x_cursor + 5, y1 + 5),
                             clean_w,
                             font=font,
                             fill=(0, 0, 0, 200),
-                            stroke_width=7,
+                            stroke_width=10,
                             stroke_fill=(0, 0, 0, 200),
                         )
-                        # Text chính
+                        # Text chính (Kỹ thuật 2-Pass Stroke: Pass 1 viền đen mập 10px, Pass 2 ruột đặc 100%)
+                        text_draw.text(
+                            (x_cursor, y1),
+                            clean_w,
+                            font=font,
+                            fill=(0, 0, 0, 255),
+                            stroke_width=10,
+                            stroke_fill=(0, 0, 0, 255),
+                        )
                         text_draw.text(
                             (x_cursor, y1),
                             clean_w,
                             font=font,
                             fill=color,
-                            stroke_width=7,
-                            stroke_fill=stroke_rgba,
+                            stroke_width=0,
                         )
                         w_box = font.getbbox(clean_w + " ")
                         x_cursor += (w_box[2] - w_box[0])
@@ -209,17 +216,24 @@ def generate_graphic_subtitles(
                             clean_w,
                             font=font,
                             fill=(0, 0, 0, 200),
-                            stroke_width=7,
+                            stroke_width=10,
                             stroke_fill=(0, 0, 0, 200),
                         )
-                        # Text chính
+                        # Text chính (Kỹ thuật 2-Pass Stroke: Pass 1 viền đen mập 10px, Pass 2 ruột đặc 100%)
+                        text_draw.text(
+                            (x_cursor, y2),
+                            clean_w,
+                            font=font,
+                            fill=(0, 0, 0, 255),
+                            stroke_width=10,
+                            stroke_fill=(0, 0, 0, 255),
+                        )
                         text_draw.text(
                             (x_cursor, y2),
                             clean_w,
                             font=font,
                             fill=color,
-                            stroke_width=7,
-                            stroke_fill=stroke_rgba,
+                            stroke_width=0,
                         )
                         w_box = font.getbbox(clean_w + " ")
                         x_cursor += (w_box[2] - w_box[0])
