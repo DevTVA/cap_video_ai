@@ -122,22 +122,22 @@ def generate_graphic_subtitles(
 
         if not words_list:
             continue
-        # Thuật toán Đảm bảo Phụ đề ĐỦ MỘT CÂU HOÀN CHỈNH cho nhân vật nói (KHÔNG ngắt theo dấu câu/từ viết tắt như MR.):
+        # Thuật toán phụ đề chuẩn 100% theo video mẫu phong cách 4.mp4 (Gộp 2-3 từ ngắn, chia 2 dòng ngắn căn giữa):
         chunks = []
         curr_chunk = []
         for i, word_info in enumerate(words_list):
             w_text, w_start, w_end = word_info
             curr_chunk.append(word_info)
 
-            # 1. KHÔNG ngắt khi gặp dấu câu! Chỉ ngắt khi khoảng lặng âm thanh giữa 2 từ > 0.45s (hít thở dài/ngắt câu mới)
+            # 1. KHÔNG ngắt theo dấu câu/từ viết tắt. Ngắt khi khoảng lặng âm thanh giữa 2 từ > 0.35s
             has_large_pause = False
             if i < len(words_list) - 1:
                 next_start = words_list[i + 1][1]
-                if next_start - w_end > 0.45:
+                if next_start - w_end > 0.35:
                     has_large_pause = True
 
-            # 2. Ngắt khi đạt đủ số từ của một câu hoàn chỉnh (6-7 từ)
-            reached_max_words = len(curr_chunk) >= 6
+            # 2. Ngắt khi cụm đạt 3 từ ngắn (chuẩn 100% theo mẫu phong cách 4.mp4)
+            reached_max_words = len(curr_chunk) >= 3
 
             if has_large_pause or reached_max_words or i == len(words_list) - 1:
                 chunks.append(curr_chunk)
