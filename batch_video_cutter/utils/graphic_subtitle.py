@@ -347,20 +347,49 @@ def clean_caption_text(text: str) -> str:
     return clean
 
 
+def ensure_caption_8_to_12_words(title_text: str, fallback_text: str = "") -> list:
+    """Vòng lặp đảm bảo 100% Top Caption luôn có từ 8 đến 12 từ."""
+    clean_t = clean_caption_text(title_text).replace('"', '').strip()
+    words = clean_t.split()
+
+    # Vòng lặp 1: Bổ sung từ từ fallback_text nếu ít hơn 8 từ
+    if len(words) < 8 and fallback_text:
+        fallback_clean = clean_caption_text(fallback_text)
+        extra_words = fallback_clean.split()
+        for w in extra_words:
+            if w not in words:
+                words.append(w)
+            if len(words) >= 8:
+                break
+
+    # Vòng lặp 2: Nếu vẫn ít hơn 8 từ, bổ sung viral filler words
+    viral_fillers = ["MUST", "WATCH", "SHOCKING", "REVEAL", "STORY", "FULL", "UNBELIEVABLE"]
+    fill_idx = 0
+    while len(words) < 8:
+        words.append(viral_fillers[fill_idx % len(viral_fillers)])
+        fill_idx += 1
+
+    # Cắt nếu quá 12 từ
+    if len(words) > 12:
+        words = words[:12]
+
+    return words
+
+
 def generate_top_caption_layer(
     title_text: str,
     output_png: Path,
     canvas_size: Tuple[int, int] = (1080, 1440),
     top_area_height: int = 280,
+    fallback_text: str = "",
 ) -> Optional[Path]:
     """Tạo file PNG chứa Top Caption Chữ ĐEN Bo Viền TRẮNG Nền ĐEN cho Canvas 3:4 và Nền Vàng cho Canvas 1:1."""
     if not title_text:
         return None
-    clean_t = clean_caption_text(title_text)
-    clean_t = clean_t.replace('"', '').strip()
-    words = clean_t.split()
-    if len(words) > 9:
-        clean_t = " ".join(words[:9])
+    
+    # 1. Chạy vòng lặp đảm bảo 100% số từ từ 8 đến 12 từ
+    words = ensure_caption_8_to_12_words(title_text, fallback_text)
+    clean_t = " ".join(words)
 
     font_path = "C:/Windows/Fonts/arialbd.ttf"
     font_size = 44
@@ -402,10 +431,6 @@ def generate_top_caption_layer(
 
     # 2. Nếu là Canvas 3:4 (1080x1440): Render SINGLE WHITE BADGE BO GÓC GIÃN ĐẾN LỀ 40PX TRƯỚC KHU XUỐNG DÒNG MỚI (Style 4)
     else:
-        # Giới hạn số từ Top Caption: Tối thiểu 8 từ, tối đa 12 từ
-        if len(words) > 12:
-            words = words[:12]
-
         font_size = 40
         try:
             font = ImageFont.truetype(font_path, font_size)

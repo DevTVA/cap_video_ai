@@ -192,7 +192,8 @@ class PipelineOrchestrator:
                                 title_text,
                                 output_png=top_cap_png,
                                 canvas_size=canvas_res,
-                                top_area_height=top_area_h
+                                top_area_height=top_area_h,
+                                fallback_text=getattr(seg, "reason", ""),
                             )
                             if cap_png_path and cap_png_path.exists():
                                 clip_dur = seg.end_time - seg.start_time
