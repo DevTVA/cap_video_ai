@@ -52,21 +52,21 @@ EMOTION_EMOJI_MAP = {
     "fire": "🔥", "cháy": "🔥", "nóng": "🔥", "hot": "🔥",
     "secret": "🤫", "bí mật": "🤫", "giấu": "🤫",
     "ghost": "👻", "ma": "👻",
-    "king": "👑", "vua": "👑", "chủ": "👑",
+    "king": "👑", "vua": "👑", "chủ": "👑", "boss": "👑", "sếp": "👑",
     "idea": "💡", "ý tưởng": "💡", "mẹo": "💡", "bí quyết": "💡",
     "think": "🤔", "suy nghĩ": "🤔", "nghĩ": "🤔", "hiểu": "🤔",
     "question": "❓", "hỏi": "❓", "thắc mắc": "❓",
-    "money": "💰", "tiền": "💰", "đô": "💰", "giàu": "💰", "chi phí": "💰", "giá": "💰", "cash": "💵",
+    "money": "💰", "tiền": "💰", "đô": "💰", "giàu": "💰", "chi phí": "💰", "giá": "💰", "cash": "💵", "kinh doanh": "💰", "bán hàng": "💰",
     "food": "🍕", "ăn": "🍕", "ngon": "🍕", "bánh": "🍕",
     "music": "🎵", "nhạc": "🎵", "hát": "🎵", "âm thanh": "🎵",
     "time": "⏰", "thời gian": "⏰", "giờ": "⏰", "phút": "⏰", "trễ": "⏰", "muộn": "⏰",
     "look": "👀", "xem": "👀", "nhìn": "👀", "thấy": "👀", "mắt": "👀",
-    "rocket": "🚀", "tên lửa": "🚀", "tăng trưởng": "🚀", "bay": "🚀",
+    "rocket": "🚀", "tên lửa": "🚀", "tăng trưởng": "🚀", "bay": "🚀", "tương lai": "🚀", "future": "🚀",
     "target": "🎯", "mục tiêu": "🎯", "đích": "🎯",
     "100": "💯", "hoàn hảo": "💯",
     "clap": "👏", "vỗ tay": "👏", "khen": "👏",
     "pray": "🙏", "cầu nguyện": "🙏", "xin": "🙏",
-    "strong": "💪", "khỏe": "💪", "mạnh": "💪", "bền": "💪",
+    "strong": "💪", "khỏe": "💪", "mạnh": "💪", "bền": "💪", "kỹ năng": "💪", "skill": "💪",
     "punch": "🥊", "đấm": "🥊",
     "run": "🏃", "chạy": "🏃", "nhanh": "🏃", "tốc độ": "🏃",
     "piece": "🧩", "puzzle": "🧩", "mảnh ghép": "🧩",
@@ -74,13 +74,14 @@ EMOTION_EMOJI_MAP = {
     "pin": "📍", "location": "📍", "địa điểm": "📍", "chỗ": "📍",
     "what": "🤔", "gì": "🤔", "cái gì": "🤔",
     "why": "🤔", "tại sao": "🤔", "vì sao": "🤔",
+    "ai": "🤖", "bot": "🤖", "robot": "🤖", "công nghệ": "💻", "tech": "💻", "computer": "💻", "máy tính": "💻", "code": "💻", "coder": "💻", "lập trình": "💻",
 
     # Vật phẩm, Thiên nhiên & Công nghệ
     "home": "🏠", "house": "🏠", "nhà": "🏠", "building": "🏢",
     "car": "🚗", "xe": "🚗", "ô tô": "🚗",
     "phone": "📱", "điện thoại": "📱", "app": "📱", "ứng dụng": "📱",
     "gift": "🎁", "quà": "🎁", "quà tặng": "🎁",
-    "book": "📚", "sách": "📚", "khóa học": "📚", "học": "📚",
+    "book": "📚", "sách": "📚", "khóa học": "📚", "học": "📚", "bài học": "📚", "kiến thức": "📚",
     "drink": "🥤", "uống": "🥤", "coffee": "☕", "cà phê": "☕", "beer": "🍺", "bia": "🍺",
     "dinner": "🍴", "lunch": "🍴", "meal": "🍲", "bữa ăn": "🍲",
     "baby": "👶", "em bé": "👶", "trẻ em": "👶",
@@ -195,12 +196,13 @@ def generate_ass_subtitle(
     font_size: int = 85,
     primary_color: str = "&H00FFFFFF",    # TRẮNG TƯƠI
     outline_color: str = "&H00000000",    # VIỀN ĐEN DÀY SIÊU MẬP
-    highlight_color_name: str = "dynamic", # "dynamic" (luân chuyển 3 màu), "green", "red", "yellow"
+    highlight_color_name: str = "yellow", # Màu Vàng tươi cố định chuẩn
     italic: bool = False,                 # Nghiêng chữ (Slant)
     position: str = "bottom",
     margin_v: int = 180,
     emoji_on_top: bool = True,            # Bật hiển thị Emoji sinh động màu sắc
     canvas_size: Tuple[int, int] = (1080, 1080),
+    outcard_start_s: Optional[float] = None,
 ) -> Path:
     """Tạo file ASS subtitle CapCut hoặc Graphic Subtitle PNG Layer chuẩn 100% đồng bộ."""
     import random
@@ -225,6 +227,7 @@ def generate_ass_subtitle(
             emoji_on_top=True,
             canvas_size=canvas_size,
             position=position,
+            outcard_start_s=outcard_start_s,
         )
         return output_path, graphic_frames
 
@@ -288,7 +291,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                 for idx, (word_text, _, _) in enumerate(line1_words):
                     clean_word = word_text.upper().strip()
                     if idx == active_idx:
-                        l1_formatted.append(f"{{\\fscx118\\fscy118\\c{active_color_hex}}}{clean_word}{{\\r\\c{primary_color}}}")
+                        l1_formatted.append(f"{{\\c{active_color_hex}}}{clean_word}{{\\r\\c{primary_color}}}")
                     else:
                         l1_formatted.append(clean_word)
                 if l1_formatted:
@@ -298,7 +301,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                 for idx, (word_text, _, _) in enumerate(line2_words, start=len(line1_words)):
                     clean_word = word_text.upper().strip()
                     if idx == active_idx:
-                        l2_formatted.append(f"{{\\fscx118\\fscy118\\c{active_color_hex}}}{clean_word}{{\\r\\c{primary_color}}}")
+                        l2_formatted.append(f"{{\\c{active_color_hex}}}{clean_word}{{\\r\\c{primary_color}}}")
                     else:
                         l2_formatted.append(clean_word)
                 if l2_formatted:
@@ -329,6 +332,7 @@ def create_subtitles_from_transcript(
     italic: bool = False,
     add_emojis: bool = True,
     canvas_size: Tuple[int, int] = (1080, 1080),
+    outcard_start_s: Optional[float] = None,
 ) -> tuple:
     """Tạo file ASS subtitle CapCut Active Word từ transcript segments và trả về (sub_path, timed_emojis)."""
     subtitle_lines: List[SubtitleLine] = []
@@ -375,5 +379,6 @@ def create_subtitles_from_transcript(
         position=position,
         emoji_on_top=add_emojis,
         canvas_size=canvas_size,
+        outcard_start_s=outcard_start_s,
     )
 

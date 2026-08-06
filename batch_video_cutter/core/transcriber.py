@@ -324,12 +324,14 @@ def format_transcript_for_llm(
             seconds = int(seg.start) % 60
             lines.append(f"[{minutes:02d}:{seconds:02d}] {seg.text}")
 
-    # Nếu bộ lọc làm rỗng transcript (do video quá ngắn), fallback về full transcript
+    # Nếu bộ lọc làm rỗng transcript (do video quá ngắn), fallback chấp nhận đoạn ngắn sau mốc intro_offset
     if not lines:
+        eff_intro = intro_offset if result.duration > intro_offset + 20.0 else 0.0
         for seg in result.segments:
-            minutes = int(seg.start) // 60
-            seconds = int(seg.start) % 60
-            lines.append(f"[{minutes:02d}:{seconds:02d}] {seg.text}")
+            if seg.start >= eff_intro:
+                minutes = int(seg.start) // 60
+                seconds = int(seg.start) % 60
+                lines.append(f"[{minutes:02d}:{seconds:02d}] {seg.text}")
 
     return "\n".join(lines)
 

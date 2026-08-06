@@ -79,33 +79,252 @@ def _get_font(font_name: str, font_size: int) -> ImageFont.FreeTypeFont:
     return ImageFont.load_default()
 
 
+PUNCTUATION_ENDINGS = (",", ".", "!", "?", ";", ":")
+# Danh sách Stop Words tiếng Anh thông thường (KHÔNG bao gồm các từ phủ định nhấn mạnh như NOT, NO, NEVER để ưu tiên tô màu Vàng)
+ENGLISH_STOP_WORDS = {
+    "A", "AN", "THE", "IS", "ARE", "AM", "WAS", "WERE", "BE", "BEEN", "BEING",
+    "HAVE", "HAS", "HAD", "DO", "DOES", "DID", "TO", "IN", "ON", "AT", "OF",
+    "FOR", "WITH", "BY", "FROM", "UP", "ABOUT", "INTO", "OVER", "AFTER",
+    "AND", "OR", "BUT", "IF", "SO", "THAN", "THAT", "THIS", "THESE", "THOSE",
+    "IT", "ITS", "HE", "SHE", "THEY", "THEIR", "THEM", "YOU", "YOUR", "WE", "MY",
+    "ME", "OUR", "US", "HIS", "HER", "WHAT", "WHO", "WHICH", "WHEN", "WHERE", "WHY", "HOW"
+}
+
+
+def _split_words_by_rhythm_and_punctuation(
+    words_list: List[Tuple[str, float, float]],
+    max_words: int = 5,
+) -> List[List[Tuple[str, float, float]]]:
+    """Ngắt cụm từ phụ đề theo Dấu câu (Punctuation) và Khoảng dừng hít thở giữa thoại (Pause detection)."""
+    if not words_list:
+        return []
+
+    chunks: List[List[Tuple[str, float, float]]] = []
+    current_chunk: List[Tuple[str, float, float]] = []
+
+    for i, w_info in enumerate(words_list):
+        w_word, w_start, w_end = w_info
+        current_chunk.append(w_info)
+
+        has_punctuation = any(w_word.strip().endswith(p) for p in PUNCTUATION_ENDINGS)
+
+        has_pause = False
+        if i < len(words_list) - 1:
+            next_start = words_list[i + 1][1]
+            if next_start - w_end > 0.22:
+                has_pause = True
+
+        is_max_length = len(current_chunk) >= max_words
+
+        if has_punctuation or has_pause or is_max_length:
+            chunks.append(current_chunk)
+            current_chunk = []
+
+    if current_chunk:
+        chunks.append(current_chunk)
+
+    return chunks
+
+
+def _select_emphasis_words_in_chunk(chunk: List[Tuple[str, float, float]]) -> set:
+    """Tự động chọn duy nhất 1 từ nhấn mạnh trong cụm CHỈ KHI cụm có từ 2 từ trở lên (cụm 1 từ giữ 100% màu Trắng)."""
+    if not chunk or len(chunk) < 2:
+        return set()
+
+    indices = []
+    for idx, (word_text, s, e) in enumerate(chunk):
+        clean_w = re.sub(r"[^\w\s]", "", word_text).upper().strip()
+        if clean_w and clean_w not in ENGLISH_STOP_WORDS:
+            indices.append(idx)
+
+    if not indices:
+        longest_idx = max(range(len(chunk)), key=lambda i: len(chunk[i][0]))
+        return {longest_idx}
+
+    # Chọn 1 từ nhấn mạnh có độ dài lớn nhất hoặc mang cảm xúc mạnh nhất
+    best_idx = max(indices, key=lambda i: len(chunk[i][0]))
+    return {best_idx}
+
+
+def _render_single_chunk_frame(
+    chunk: List[Tuple[str, float, float]],
+    line1_words: List[Tuple[str, float, float]],
+    line2_words: List[Tuple[str, float, float]],
+    active_emphasis_idx: Optional[int],
+    font: ImageFont.FreeTypeFont,
+    font_size: int,
+    primary_rgba: Tuple[int, int, int, int],
+    highlight_rgba: Tuple[int, int, int, int],
+    canvas_size: Tuple[int, int],
+    margin_v: int,
+    position: str,
+    emoji_img: Optional[Image.Image],
+    font_name: str = "Impact",
+) -> Image.Image:
+    """Render 1 frame PNG với 2X Super-Sampling Anti-Aliasing, Phóng to từ nhấn 1.15X & Dynamic 3D Emoji Pop-Up chuẩn CapCut Pro."""
+    scale = 2
+    canvas_2x = (canvas_size[0] * scale, canvas_size[1] * scale)
+    font_size_2x = font_size * scale
+    font_2x = _get_font(font_name, font_size_2x)
+
+    shadow_img = Image.new("RGBA", canvas_2x, (0, 0, 0, 0))
+    shadow_draw = ImageDraw.Draw(shadow_img)
+
+    text_img = Image.new("RGBA", canvas_2x, (0, 0, 0, 0))
+    text_draw = ImageDraw.Draw(text_img)
+
+    l1_text = " ".join(w[0].upper().strip() for w in line1_words) if line1_words else ""
+    l2_text = " ".join(w[0].upper().strip() for w in line2_words) if line2_words else ""
+
+    bbox1 = font_2x.getbbox(l1_text) if l1_text else (0, 0, 0, 0)
+    l1_width = bbox1[2] - bbox1[0]
+
+    bbox2 = font_2x.getbbox(l2_text) if l2_text else (0, 0, 0, 0)
+    l2_width = bbox2[2] - bbox2[0]
+
+    eff_margin_v = (330 if canvas_size[1] > 1080 else margin_v) * scale
+    if position == "top":
+        y1 = 45 * scale
+        y2 = y1 + font_size_2x + 10 * scale
+    else:
+        # Cố định mốc y2 (dòng đáy) làm lề chân tĩnh tuyệt đối, chống rung giật nhảy 140px lên xuống
+        y2 = canvas_2x[1] - eff_margin_v - font_size_2x - 20 * scale
+        y1 = y2 - font_size_2x - 10 * scale
+        if not l2_text:
+            # Nếu cụm chỉ có 1 dòng, luôn đặt dòng chữ đó ở đúng mốc y2 để lề chân tĩnh 100%
+            y1 = y2
+
+    last_line_end_x = canvas_2x[0] // 2
+    last_line_y = y1
+
+    # --- Render Dòng 1 ---
+    if l1_text:
+        x_cursor = (canvas_2x[0] - l1_width) // 2
+        for idx, (word_text, _, _) in enumerate(line1_words):
+            clean_w = re.sub(r'>>+|[<>\[\]()]', '', word_text).upper().strip()
+            if not clean_w:
+                continue
+
+            is_active = (idx == active_emphasis_idx)
+            current_font = font_2x
+            color = highlight_rgba if is_active else primary_rgba
+            stroke_w = max(8, int(12 * (font_size / 66.0)))
+            y_pos = y1
+
+            # Soft Drop Shadow 2X
+            shadow_draw.text(
+                (x_cursor + 8, y_pos + 8),
+                clean_w,
+                font=current_font,
+                fill=(0, 0, 0, 200),
+                stroke_width=stroke_w,
+                stroke_fill=(0, 0, 0, 200),
+            )
+            # Text chính 2X
+            text_draw.text(
+                (x_cursor, y_pos),
+                clean_w,
+                font=current_font,
+                fill=(0, 0, 0, 255),
+                stroke_width=stroke_w,
+                stroke_fill=(0, 0, 0, 255),
+            )
+            text_draw.text(
+                (x_cursor, y_pos),
+                clean_w,
+                font=current_font,
+                fill=color,
+                stroke_width=0,
+            )
+            w_box = current_font.getbbox(clean_w + " ")
+            x_cursor += (w_box[2] - w_box[0])
+
+        last_line_end_x = x_cursor
+        last_line_y = y1
+
+    # --- Render Dòng 2 ---
+    if l2_text:
+        x_cursor = (canvas_2x[0] - l2_width) // 2
+        for idx, (word_text, _, _) in enumerate(line2_words, start=len(line1_words)):
+            clean_w = re.sub(r'>>+|[<>\[\]()]', '', word_text).upper().strip()
+            if not clean_w:
+                continue
+
+            is_active = (idx == active_emphasis_idx)
+            current_font = font_2x
+            color = highlight_rgba if is_active else primary_rgba
+            stroke_w = max(8, int(12 * (font_size / 66.0)))
+            y_pos = y2
+
+            shadow_draw.text(
+                (x_cursor + 8, y_pos + 8),
+                clean_w,
+                font=current_font,
+                fill=(0, 0, 0, 200),
+                stroke_width=stroke_w,
+                stroke_fill=(0, 0, 0, 200),
+            )
+            text_draw.text(
+                (x_cursor, y_pos),
+                clean_w,
+                font=current_font,
+                fill=(0, 0, 0, 255),
+                stroke_width=stroke_w,
+                stroke_fill=(0, 0, 0, 255),
+            )
+            text_draw.text(
+                (x_cursor, y_pos),
+                clean_w,
+                font=current_font,
+                fill=color,
+                stroke_width=0,
+            )
+            w_box = current_font.getbbox(clean_w + " ")
+            x_cursor += (w_box[2] - w_box[0])
+
+        last_line_end_x = x_cursor
+        last_line_y = y2
+
+    # Dán HD Color Emoji 3D 2X tĩnh ở cuối câu cho toàn bộ thời lượng cụm
+    if emoji_img:
+        emoji_2x = emoji_img.resize((135, 135), Image.Resampling.LANCZOS)
+        emoji_x = min(canvas_2x[0] - 145, last_line_end_x + 12)
+        emoji_y = int(last_line_y + 12)
+        text_img.paste(emoji_2x, (emoji_x, emoji_y), emoji_2x)
+
+    shadow_img = shadow_img.filter(ImageFilter.GaussianBlur(6))
+    composite_2x = Image.alpha_composite(shadow_img, text_img)
+
+    # Thu nhỏ Super-Sampling 2X -> 1X bằng Lanczos để đạt độ mịn tròn nét tuyệt đối
+    composite_1x = composite_2x.resize(canvas_size, Image.Resampling.LANCZOS)
+    return composite_1x
+
+
 def generate_graphic_subtitles(
     subtitle_lines: List[SubtitleLine],
     tmp_dir: Path,
     font_name: str = "Impact",
-    font_size: int = 85,
+    font_size: int = 66,
     primary_color: str = "&H00FFFFFF",
-    highlight_color_name: str = "dynamic",
+    highlight_color_name: str = "yellow",
     margin_v: int = 180,
     emoji_on_top: bool = True,
     canvas_size: Tuple[int, int] = (1080, 1080),
     position: str = "bottom",
+    outcard_start_s: Optional[float] = None,
 ) -> List[Tuple[Path, float, float]]:
-    """Tạo danh sách các file ảnh PNG phụ đề đồ họa trong suốt chuẩn font Impact bản first commit (Ruột đặc 100%, Viền đen mập 8px, Soft Drop Shadow, HD Emoji màu)."""
+    """Tạo danh sách các file ảnh PNG phụ đề đồ họa (Mặc định TRẮNG cho cụm < 4 từ, Karaoke 1 từ cho cụm >= 4 từ)."""
     tmp_dir = Path(tmp_dir)
     tmp_dir.mkdir(parents=True, exist_ok=True)
 
     font = _get_font(font_name, font_size)
-    primary_rgba = (255, 255, 255, 255) # Trắng Tươi cho từ chưa active
-    stroke_rgba = (0, 0, 0, 255) # Viền đen mập
+    primary_rgba = (255, 255, 255, 255) # Mặc định TRẮNG TƯƠI cho tất cả từ
 
-    # Gam màu Highlight nổi bật: Xanh lá neon (#00FF00), Vàng tươi (#FFFF00), Đỏ rực (#FF0000)
-    dynamic_rgbas = [
-        (0, 255, 0, 255),   # Xanh lá neon
-        (255, 255, 0, 255), # Vàng tươi
-        (255, 0, 0, 255),   # Đỏ rực
-    ]
-    color_counter = 0
+    if highlight_color_name.lower() in ("green", "neon_green"):
+        highlight_rgba = (0, 255, 0, 255)
+    else:
+        highlight_rgba = (255, 255, 0, 255)
+
     graphic_results: List[Tuple[Path, float, float]] = []
     frame_count = 0
 
@@ -123,13 +342,27 @@ def generate_graphic_subtitles(
         if not words_list:
             continue
 
-        # Cụm 4 từ chuẩn 100% phiên commit 1:
-        chunk_size = 4
-        chunks = [words_list[i:i + chunk_size] for i in range(0, len(words_list), chunk_size)]
+        # 1. Chia cụm thông minh theo Nhịp thoại & Dấu câu (Speech-Rhythm & Punctuation)
+        chunks = _split_words_by_rhythm_and_punctuation(words_list, max_words=5)
 
         for chunk_idx, chunk in enumerate(chunks):
             if not chunk:
                 continue
+
+            chunk_start = chunk[0][1]
+            chunk_end = chunk[-1][2]
+
+            # Xóa sạch phụ đề ở khoảng thời gian Outcard cuối video
+            if outcard_start_s is not None:
+                if chunk_start >= outcard_start_s:
+                    continue
+                chunk_end = min(chunk_end, outcard_start_s)
+
+            if chunk_start >= chunk_end:
+                continue
+
+            # Chỉ chọn 1 từ nhấn mạnh NẾU cụm dài >= 4 từ
+            emphasis_indices = _select_emphasis_words_in_chunk(chunk)
 
             # Xác định Emoji màu 3D
             chunk_emoji = None
@@ -150,169 +383,104 @@ def generate_graphic_subtitles(
                             logger.warning(f"Không thể nạp ảnh emoji {emoji_png_path}: {e}")
                             emoji_img = None
 
-            # Chia chunk làm 2 dòng nếu có từ 3 từ trở lên (bản commit 1 chuẩn)
+            # Chia chunk làm 2 dòng nếu có từ 3 từ trở lên
             mid_point = len(chunk) // 2 if len(chunk) >= 3 else len(chunk)
             line1_words = chunk[:mid_point]
             line2_words = chunk[mid_point:]
 
-            # Render từng mốc thoại trong chunk
-            for active_idx, active_word_info in enumerate(chunk):
-                w_word, w_start, w_end = active_word_info
-                if w_start >= w_end:
+            # 2. Xây dựng mốc thời gian Karaoke đổi màu lần lượt từng từ theo nhịp đọc thoại thực tế (Chuẩn CapCut Karaoke)
+            time_intervals = []
+            n_words = len(chunk)
+            for idx in range(n_words):
+                w_text, w_start, w_end = chunk[idx]
+                s = chunk_start if idx == 0 else max(chunk[idx - 1][2], w_start)
+                if idx < n_words - 1:
+                    e = chunk[idx + 1][1]
+                else:
+                    e = chunk_end
+
+                if e > s + 0.02:
+                    time_intervals.append((idx, s, e))
+
+            if not time_intervals:
+                time_intervals = [(None, chunk_start, chunk_end)]
+
+            # Cache frame composite để tránh render lặp
+            rendered_frames = {}
+
+            for active_emph_idx, interval_s, interval_e in time_intervals:
+                if outcard_start_s is not None:
+                    if interval_s >= outcard_start_s:
+                        continue
+                    interval_e = min(interval_e, outcard_start_s)
+
+                if interval_e <= interval_s:
                     continue
 
-                active_rgba = dynamic_rgbas[color_counter % len(dynamic_rgbas)]
-                color_counter += 1
+                if active_emph_idx not in rendered_frames:
+                    rendered_frames[active_emph_idx] = _render_single_chunk_frame(
+                        chunk=chunk,
+                        line1_words=line1_words,
+                        line2_words=line2_words,
+                        active_emphasis_idx=active_emph_idx,
+                        font=font,
+                        font_size=font_size,
+                        primary_rgba=primary_rgba,
+                        highlight_rgba=highlight_rgba,
+                        canvas_size=canvas_size,
+                        margin_v=margin_v,
+                        position=position,
+                        emoji_img=emoji_img,
+                        font_name=font_name,
+                    )
 
-                # 1. Layer bóng đổ Soft Drop Shadow
-                shadow_img = Image.new("RGBA", canvas_size, (0, 0, 0, 0))
-                shadow_draw = ImageDraw.Draw(shadow_img)
-
-                # 2. Layer chữ chính
-                text_img = Image.new("RGBA", canvas_size, (0, 0, 0, 0))
-                text_draw = ImageDraw.Draw(text_img)
-
-                l1_text = " ".join(w[0].upper().strip() for w in line1_words) if line1_words else ""
-                l2_text = " ".join(w[0].upper().strip() for w in line2_words) if line2_words else ""
-
-                bbox1 = font.getbbox(l1_text) if l1_text else (0, 0, 0, 0)
-                l1_width = bbox1[2] - bbox1[0]
-
-                bbox2 = font.getbbox(l2_text) if l2_text else (0, 0, 0, 0)
-                l2_width = bbox2[2] - bbox2[0]
-
-                eff_margin_v = 330 if canvas_size[1] > 1080 else margin_v
-                if position == "top":
-                    base_y = 45
-                else:
-                    base_y = canvas_size[1] - eff_margin_v - font_size * (2 if l2_text else 1) - 20
-
-                y1 = base_y
-                y2 = base_y + font_size + 10
-
-                # --- Render Dòng 1 ---
-                if l1_text:
-                    x_cursor = (canvas_size[0] - l1_width) // 2
-                    for idx, (word_text, _, _) in enumerate(line1_words):
-                        clean_w = re.sub(r'>>+|[<>\[\]()]', '', word_text).upper().strip()
-                        if not clean_w:
-                            continue
-                        color = (0, 255, 0, 255) if idx == active_idx else primary_rgba
-
-                        # Soft Drop Shadow
-                        shadow_draw.text(
-                            (x_cursor + 5, y1 + 5),
-                            clean_w,
-                            font=font,
-                            fill=(0, 0, 0, 200),
-                            stroke_width=8,
-                            stroke_fill=(0, 0, 0, 200),
-                        )
-                        # Text chính (Kỹ thuật 2-Pass Stroke bản commit 1: Pass 1 viền đen mập 8px, Pass 2 ruột đặc 100%)
-                        text_draw.text(
-                            (x_cursor, y1),
-                            clean_w,
-                            font=font,
-                            fill=(0, 0, 0, 255),
-                            stroke_width=8,
-                            stroke_fill=(0, 0, 0, 255),
-                        )
-                        text_draw.text(
-                            (x_cursor, y1),
-                            clean_w,
-                            font=font,
-                            fill=color,
-                            stroke_width=0,
-                        )
-                        w_box = font.getbbox(clean_w + " ")
-                        x_cursor += (w_box[2] - w_box[0])
-
-                # --- Render Dòng 2 ---
-                last_line_end_x = (canvas_size[0] + l1_width) // 2 if not l2_text else (canvas_size[0] + l2_width) // 2
-                last_line_y = y1 if not l2_text else y2
-
-                if l2_text:
-                    x_cursor = (canvas_size[0] - l2_width) // 2
-                    for idx, (word_text, _, _) in enumerate(line2_words, start=len(line1_words)):
-                        clean_w = re.sub(r'>>+|[<>\[\]()]', '', word_text).upper().strip()
-                        if not clean_w:
-                            continue
-                        color = (0, 255, 0, 255) if idx == active_idx else primary_rgba
-
-                        # Soft Drop Shadow
-                        shadow_draw.text(
-                            (x_cursor + 5, y2 + 5),
-                            clean_w,
-                            font=font,
-                            fill=(0, 0, 0, 200),
-                            stroke_width=8,
-                            stroke_fill=(0, 0, 0, 200),
-                        )
-                        # Text chính (Kỹ thuật 2-Pass Stroke bản commit 1: Pass 1 viền đen mập 8px, Pass 2 ruột đặc 100%)
-                        text_draw.text(
-                            (x_cursor, y2),
-                            clean_w,
-                            font=font,
-                            fill=(0, 0, 0, 255),
-                            stroke_width=8,
-                            stroke_fill=(0, 0, 0, 255),
-                        )
-                        text_draw.text(
-                            (x_cursor, y2),
-                            clean_w,
-                            font=font,
-                            fill=color,
-                            stroke_width=0,
-                        )
-                        w_box = font.getbbox(clean_w + " ")
-                        x_cursor += (w_box[2] - w_box[0])
-
-                # Dán HD Color Emoji 3D ngay sát bên phải dấu chấm `.`
-                if emoji_img:
-                    emoji_x = min(canvas_size[0] - 70, last_line_end_x + 8)
-                    emoji_y = int(last_line_y + 10)
-                    text_img.paste(emoji_img, (emoji_x, emoji_y), emoji_img)
-
-                # Làm mờ mịn lớp bóng đổ Soft Drop Shadow
-                shadow_img = shadow_img.filter(ImageFilter.GaussianBlur(3))
-
-                # Gộp Lớp Bóng Đổ + Lớp Chữ Chính (Font Impact CapCut bản commit 1)
-                composite = Image.alpha_composite(shadow_img, text_img)
-
-                # Lưu file PNG
+                composite = rendered_frames[active_emph_idx]
                 frame_count += 1
                 out_png_path = tmp_dir / f"g_sub_{frame_count:04d}.png"
                 composite.save(out_png_path, "PNG")
-                graphic_results.append((out_png_path, w_start, w_end))
+                graphic_results.append((out_png_path, interval_s, interval_e))
 
-    # Khử chớp nháy 100% (Anti-Flicker Seamless Subtitle Engine)
+    # Khử chớp nháy Anti-Flicker & Trám liền mạch 100% khoảng lặng (Triệt tiêu hoàn toàn giật chớp tắt)
     if graphic_results:
-        graphic_results.sort(key=lambda x: x[1])
-        sanitized = []
+        # Pass 1: Sắp xếp theo (start_time, end_time) và kéo dài e = next_s nếu khoảng lặng < 0.60s
+        graphic_results.sort(key=lambda x: (x[1], x[2]))
+        pass1 = []
         n = len(graphic_results)
-
         for i in range(n):
             path, s, e = graphic_results[i]
+            if outcard_start_s is not None:
+                if s >= outcard_start_s:
+                    continue
+                e = min(e, outcard_start_s)
 
-            # 1. Đảm bảo thời lượng tối thiểu hiển thị của 1 khung phụ đề không dưới 0.35s
-            if (e - s) < 0.35:
-                e = s + 0.35
-
-            # 2. Xử lý va chạm & trám khoảng lặng trống giữa các khung để phụ đề KHÔNG BAO GIỜ BỊ TẮT ĐEN CHỚP NHÁY
             if i < n - 1:
                 next_s = graphic_results[i + 1][1]
-                # Nếu khoảng lặng giữa 2 khung nhỏ hơn 0.50s -> Trám kín khoảng lặng kéo dài sát khung kế tiếp!
-                if next_s > s and (next_s - e) < 0.50:
-                    e = next_s - 0.01
-                elif e >= next_s:
-                    e = max(s + 0.10, next_s - 0.01)
+                # Trám khe hở < 0.60s giữ phụ đề nối tiếp liên tục 100% không chớp tắt
+                if next_s > s and (next_s - e) < 0.60:
+                    e = next_s
+                elif e > next_s:
+                    e = next_s
 
-            if e > s + 0.05:
+            if outcard_start_s is not None:
+                e = min(e, outcard_start_s)
+
+            if e > s + 0.02:
+                pass1.append((path, round(s, 3), round(e, 3)))
+
+        # Pass 2: Khống chế s >= prev_e loại bỏ hoàn toàn 100% đè lớp FFmpeg
+        sanitized = []
+        for path, s, e in pass1:
+            if sanitized:
+                prev_path, prev_s, prev_e = sanitized[-1]
+                if s < prev_e:
+                    s = prev_e
+
+            if e > s + 0.02:
                 sanitized.append((path, round(s, 3), round(e, 3)))
 
         graphic_results = sanitized
 
-    logger.info(f"Đã tạo {len(graphic_results)} khung ảnh phụ đề đồ họa Impact CapCut (bản first commit) tại {tmp_dir}")
+    logger.info(f"Đã tạo {len(graphic_results)} khung ảnh phụ đề đồ họa Super-Sampling 2X mượt căng tại {tmp_dir}")
     return graphic_results
 
 
@@ -379,55 +547,231 @@ def censor_sensitive_words(text: str) -> str:
 
 
 def clean_caption_text(text: str) -> str:
-    """Làm sạch ký tự unicode lạ, emoji, nháy cong và tự động censor từ nhạy cảm."""
+    """Làm sạch rác LLM (ENGLISH TITLE:, markdown **, chú thích (10 WORDS), nháy thừa, emoji và censor từ nhạy cảm)."""
     if not text:
         return ""
+
+    # 1. Bỏ dấu nháy thừa và markdown bold/italic (**text**, *text*, __text__) xung quanh trước
+    text = text.replace("**", "").replace("*", "").replace("__", "").replace("`", "")
     text = text.replace("’", "'").replace("‘", "'").replace("”", '"').replace("“", '"').replace("—", "-")
-    pattern = re.compile(
-        "["
-        "\U00010000-\U0010FFFF"
-        "\u2600-\u27BF"
-        "\u2300-\u23FF"
-        "\u2B00-\u2BFF"
-        "\u2000-\u206F"
-        "\uFE00-\uFE0F"
-        "]+",
+    text = text.strip('"\' ')
+
+    # 2. Loại bỏ tiền tố nhãn rác của LLM (ví dụ: ENGLISH TITLE:, VIETNAMESE TITLE:, TITLE:, CAPTION:, HEADLINE:, TITLE EN:, SEGMENT 2: 01:47..., 1. Viral Segment Time...)
+    text = re.sub(r"^\s*(?:English|Vietnamese)\s+(?:Title|Caption|Headline)\s*[\:\-]?\s*", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"^\s*(?:Title|Caption|Headline)\s*(?:En|Vi)?\s*[\:\-]\s*", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"^\s*(?:English|Vietnamese)\s*[\:\-]\s*", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"^\s*(?:Segment|Clip|Viral Segment)\s*\d*\s*[\:\-]?\s*", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"^\s*\d+[\.\:]\s*", "", text)
+
+    # 3. Loại bỏ các chú thích số từ trong ngoặc đơn/ngoặc vuông từ LLM (ví dụ: (10 WORDS), (8 words), [10 words], (11 SECONDS))
+    text = re.sub(r"\s*[\(\[\{]\s*(?:~?\s*\d+\s*words?|word\s*count.*?|\d+\s*SECONDS?)[\)\]\}]", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"\s*[\(\[\{]\s*\d+\s*TỪ\s*[\)\]\}]", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"\b\d{1,2}:\d{2}\s*[\:\-]\s*\d{1,2}:\d{2}\b", "", text)
+
+EMOJIS_KEYWORD_MAP = [
+    (r"\b(judge|court|sues|sued|verdict|lawyer|plaintiff|defendant|rules|rule)\b", ["⚖️", "💥", "😳"]),
+    (r"\b(money|scam|scammed|pay|paid|rent|deposit|cash|dollar|\$)\b", ["💰", "⚡", "💸"]),
+    (r"\b(cheating|cheat|cheated|boyfriend|girlfriend|wife|husband|affair|romance|marriage|divorce|infidelity)\b", ["💔", "😳", "😱"]),
+    (r"\b(shocking|truth|secret|secrets|reveals|revealed|exposes|exposed|caught|drama|fight|confronts|confronted)\b", ["💥", "😱", "💣", "😳"]),
+    (r"\b(fight|attack|damage|broken|slap|police|arrest|arrested)\b", ["🚨", "💥", "⚡"]),
+]
+FALLBACK_EMOJIS = ["💥", "🔥", "⚡", "😱", "😳", "🚀", "🤫"]
+
+
+def ensure_caption_has_emoji(text: str) -> str:
+    """Đảm bảo tiêu đề luôn có ít nhất 1 emoji nổi bật và TOÀN BỘ emoji luôn nằm ở CUỐI chuỗi."""
+    if not text:
+        return text
+
+    emoji_pattern = re.compile(
+        r"[\U00010000-\U0010FFFF\u2600-\u27BF\u2300-\u23FF\u2B00-\u2BFF\uFE00-\uFE0F]+",
         flags=re.UNICODE,
     )
-    clean = pattern.sub("", text)
-    clean = re.sub(r"\s+", " ", clean).strip().upper()
+
+    found_emojis = emoji_pattern.findall(text)
+    text_clean = emoji_pattern.sub("", text)
+    text_clean = re.sub(r"\s+", " ", text_clean).strip()
+
+    if found_emojis:
+        emojis_str = " ".join(found_emojis)
+        return f"{text_clean} {emojis_str}".strip() if text_clean else emojis_str
+
+    t_lower = text_clean.lower()
+    for pattern, emoji_list in EMOJIS_KEYWORD_MAP:
+        if re.search(pattern, t_lower):
+            return f"{text_clean} {emoji_list[0]}".strip() if text_clean else emoji_list[0]
+
+    return f"{text_clean} 💥".strip() if text_clean else "💥"
+
+
+def clean_caption_text(text: str) -> str:
+    """Làm sạch rác LLM nhưng ĐẢM BẢO 100% giữ lại hoặc tự động bổ sung Emoji ở cuối tiêu đề."""
+    if not text:
+        return ""
+
+    # 1. Tách emoji ra khỏi text và BÓC TÁCH EMOJI KHỎI TEXT BODY trước khi làm sạch
+    emoji_pattern = re.compile(
+        r"[\U00010000-\U0010FFFF\u2600-\u27BF\u2300-\u23FF\u2B00-\u2BFF\uFE00-\uFE0F]+",
+        flags=re.UNICODE,
+    )
+    emoji_matches = emoji_pattern.findall(text)
+    existing_emoji = " ".join(emoji_matches) if emoji_matches else ""
+    text_no_emoji = emoji_pattern.sub("", text).strip()
+
+    # 2. Bỏ dấu nháy thừa và markdown bold/italic (**text**, *text*, __text__)
+    text = text_no_emoji.replace("**", "").replace("*", "").replace("__", "").replace("`", "")
+    text = text.replace("’", "'").replace("‘", "'").replace("”", '"').replace("“", '"').replace("—", "-")
+    text = text.strip('"\' ')
+
+    # 3. Loại bỏ tiền tố nhãn rác của LLM
+    text = re.sub(r"^\s*(?:English|Vietnamese)\s+(?:Title|Caption|Headline)\s*[\:\-]?\s*", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"^\s*(?:Title|Caption|Headline)\s*(?:En|Vi)?\s*[\:\-]\s*", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"^\s*(?:English|Vietnamese)\s*[\:\-]\s*", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"^\s*\d+[\.\:]\s*", "", text)
+
+    # 4. Loại bỏ các chú thích số từ trong ngoặc đơn/ngoặc vuông từ LLM
+    text = re.sub(r"\s*[\(\[\{]\s*(?:~?\s*\d+\s*words?|word\s*count.*?)[\)\]\}]", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"\s*[\(\[\{]\s*\d+\s*TỪ\s*[\)\]\}]", "", text, flags=re.IGNORECASE)
+    text = text.strip('"\' ')
+
+    # 5. Loại bỏ từ rác rủi ro cũ bị nối đuôi ở cuối chuỗi (sau khi đã tách sạch emoji)
+    text = re.sub(r"(?:\s+\b(?:EXPOSED|REVEALED|TRUTH|UNCOVERED|NOW)\b)+\s*$", "", text, flags=re.IGNORECASE).strip()
+
+    # 6. Làm sạch chữ, censor từ nhạy cảm và ghép lại emoji chuẩn
+    clean = re.sub(r"\s+", " ", text).strip().upper()
     clean = censor_sensitive_words(clean)
-    return clean
+
+    if existing_emoji:
+        clean = f"{clean} {existing_emoji}".strip()
+
+    return ensure_caption_has_emoji(clean)
 
 
-def ensure_caption_8_to_12_words(title_text: str, fallback_text: str = "") -> list:
-    """Đảm bảo 100% Top Caption nằm trong khoảng từ 8 đến 12 từ thuần từ gốc/transcript."""
-    clean_t = clean_caption_text(title_text).replace('"', '').strip()
+def clean_caption_text_for_frame(text: str) -> str:
+    """Làm sạch rác LLM và LOẠI BỎ 100% Emojis cho khung hình video (Top Caption PNG layer trong video không chứa emoji)."""
+    if not text:
+        return ""
+
+    # 1. Loại bỏ Emojis
+    emoji_pattern = re.compile(
+        r"[\U00010000-\U0010FFFF\u2600-\u27BF\u2300-\u23FF\u2B00-\u2BFF\uFE00-\uFE0F]+",
+        flags=re.UNICODE,
+    )
+    text = emoji_pattern.sub("", text).strip()
+
+    # 2. Bỏ dấu nháy thừa và markdown bold/italic
+    text = text.replace("**", "").replace("*", "").replace("__", "").replace("`", "")
+    text = text.replace("’", "'").replace("‘", "'").replace("”", '"').replace("“", '"').replace("—", "-")
+    text = text.strip('"\' ')
+
+    # 3. Loại bỏ tiền tố nhãn rác của LLM
+    text = re.sub(r"^\s*(?:English|Vietnamese)\s+(?:Title|Caption|Headline)\s*[\:\-]?\s*", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"^\s*(?:Title|Caption|Headline)\s*(?:En|Vi)?\s*[\:\-]\s*", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"^\s*(?:English|Vietnamese)\s*[\:\-]\s*", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"^\s*\d+[\.\:]\s*", "", text)
+
+    # 4. Loại bỏ chú thích số từ trong ngoặc từ LLM
+    text = re.sub(r"\s*[\(\[\{]\s*(?:~?\s*\d+\s*words?|word\s*count.*?)[\)\]\}]", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"\s*[\(\[\{]\s*\d+\s*TỪ\s*[\)\]\}]", "", text, flags=re.IGNORECASE)
+    text = text.strip('"\' ')
+
+    # 5. Loại bỏ từ rác rủi ro cũ bị nối đuôi ở cuối chuỗi
+    text = re.sub(r"(?:\s+\b(?:EXPOSED|REVEALED|TRUTH|UNCOVERED|NOW)\b)+\s*$", "", text, flags=re.IGNORECASE).strip()
+
+    # 6. Chuẩn hóa chữ in hoa và censor từ nhạy cảm
+    clean = re.sub(r"\s+", " ", text).strip().upper()
+    return censor_sensitive_words(clean)
+
+
+def ensure_caption_8_to_10_words(
+    title_text: str,
+    fallback_text: str = "",
+    target_min: int = 8,
+    target_max: int = 10,
+) -> list:
+    """Bóc tách danh sách từ hiển thị cho Top Caption PNG trong video frame (Không chứa emoji, giữ nguyên 100% văn bản tiếng Anh từ AI)."""
+    clean_t = clean_caption_text_for_frame(title_text).replace('"', '').strip()
     words = clean_t.split()
+    if (not words or len(words) < 4) and fallback_text:
+        words = clean_caption_text_for_frame(fallback_text).replace('"', '').strip().split()
 
-    # 1. Bổ sung từ từ fallback_text (transcript/lý do cắt clip) nếu tiêu đề gốc ít hơn 8 từ
-    if len(words) < 8 and fallback_text:
-        fallback_clean = clean_caption_text(fallback_text)
-        extra_words = fallback_clean.split()
-        for w in extra_words:
-            if w not in words:
-                words.append(w)
-            if len(words) >= 8:
-                break
+    if len(words) > target_max:
+        words = words[:target_max]
 
-    # 2. Nếu sau khi lấy từ fallback vẫn ít hơn 8 từ, lặp lại các từ có sẵn trong từ tiêu đề/transcript để đảm bảo tối thiểu 8 từ 100%
-    if len(words) < 8 and words:
-        orig_words = list(words)
-        idx = 0
-        while len(words) < 8:
-            words.append(orig_words[idx % len(orig_words)])
-            idx += 1
+    # Loại bỏ các từ trùng lặp đứng cạnh nhau
+    dedup = []
+    for w in words:
+        if not dedup or w.upper() != dedup[-1].upper():
+            dedup.append(w)
+    words = dedup
 
-    # 3. Cắt gọn nếu vượt quá 12 từ
-    if len(words) > 12:
-        words = words[:12]
+    if len(words) > target_max:
+        words = words[:target_max]
 
     return words
+
+
+def format_top_caption_lines(words: list, font: ImageFont.FreeTypeFont, max_text_w: int) -> list:
+    """Tách các từ thành 1, 2 hoặc 3 dòng cân đối đẹp mắt (Style 4 & Style 3)."""
+    if not words:
+        return []
+
+    def get_w(s):
+        bbox = font.getbbox(s)
+        return bbox[2] - bbox[0]
+
+    all_str = f'"{" ".join(words)}"'
+
+    # 1. Nếu chỉ có ít hơn 6 từ và ngắn hơn 75% max_text_w, giữ trên 1 dòng
+    if len(words) < 6 and get_w(all_str) <= (max_text_w * 0.75):
+        return [all_str]
+
+    n = len(words)
+
+    # 2. Thử tách thành 2 dòng cân đối đẹp mắt
+    candidates_2 = []
+    for i in range(1, n):
+        l1_words = words[:i]
+        l2_words = words[i:]
+        str1 = f'"{" ".join(l1_words)}'
+        str2 = f'{" ".join(l2_words)}"'
+
+        w1 = get_w(str1)
+        w2 = get_w(str2)
+
+        if w1 <= max_text_w and w2 <= max_text_w:
+            candidates_2.append((abs(w1 - w2), abs(len(l1_words) - len(l2_words)), [str1, str2], max(w1, w2)))
+
+    if candidates_2:
+        candidates_2.sort(key=lambda x: (x[0], x[1], x[3]))
+        return candidates_2[0][2]
+
+    # 3. Nếu chuỗi dài (>= 9 từ) làm 2 dòng bị quá rộng, ngắt thành 3 dòng cân đối
+    candidates_3 = []
+    for i in range(1, n - 1):
+        for j in range(i + 1, n):
+            l1_words = words[:i]
+            l2_words = words[i:j]
+            l3_words = words[j:]
+            str1 = f'"{" ".join(l1_words)}'
+            str2 = f'{" ".join(l2_words)}'
+            str3 = f'{" ".join(l3_words)}"'
+
+            w1, w2, w3 = get_w(str1), get_w(str2), get_w(str3)
+
+            if w1 <= max_text_w and w2 <= max_text_w and w3 <= max_text_w:
+                diff = max(w1, w2, w3) - min(w1, w2, w3)
+                candidates_3.append((diff, abs(len(l1_words) - len(l3_words)), [str1, str2, str3], max(w1, w2, w3)))
+
+    if candidates_3:
+        candidates_3.sort(key=lambda x: (x[0], x[1], x[2]))
+        return candidates_3[0][2]
+
+    # Fallback chia đôi từ
+    mid = max(1, n // 2)
+    l1 = f'"{" ".join(words[:mid])}'
+    l2 = f'{" ".join(words[mid:])}"'
+    return [l1, l2]
 
 
 def generate_top_caption_layer(
@@ -441,91 +785,12 @@ def generate_top_caption_layer(
     if not title_text:
         return None
     
-    # 1. Chạy vòng lặp đảm bảo 100% số từ từ 8 đến 12 từ
-    words = ensure_caption_8_to_12_words(title_text, fallback_text)
-    clean_t = " ".join(words)
-
-    # Sử dụng font Montserrat-Bold.ttf (Font chữ in hoa hình học sang trọng chuẩn như ảnh mẫu của user)
-    montserrat_path = Path(__file__).parent.parent / "assets" / "fonts" / "Montserrat-Bold.ttf"
-    if montserrat_path.exists():
-        font_path = str(montserrat_path)
+    # Canvas 1:1 (Style 3, 1080x1080) dùng 7-8 từ để hiển thị chuẩn 2 dòng cân đối, lề trên dưới thoáng rộng
+    is_canvas_1_1 = (canvas_size[0] == 1080 and canvas_size[1] == 1080) or top_area_height <= 180
+    if is_canvas_1_1:
+        words = ensure_caption_8_to_10_words(title_text, fallback_text, target_min=7, target_max=8)
     else:
-        font_path = "C:/Windows/Fonts/arialbd.ttf"
-
-    font_size = 40
-    try:
-        font = ImageFont.truetype(font_path, font_size)
-    except Exception:
-        try:
-            font = ImageFont.truetype("C:/Windows/Fonts/impact.ttf", font_size)
-        except Exception:
-            font = ImageFont.load_default()
-
-    import textwrap
-    img = Image.new("RGBA", canvas_size, (0, 0, 0, 0))
-    draw = ImageDraw.Draw(img)
-
-def format_top_caption_lines(words: list, font: ImageFont.FreeTypeFont, max_text_w: int) -> list:
-    """Tách các từ thành 1, 2 hoặc 3 dòng:
-    - Dòng 1: Dồn tối đa từ cho sát mốc lề max_text_w.
-    - Dòng 2 & 3: Nếu phần từ còn lại tràn mốc max_text_w thì tự động tách thành 3 dòng cân đối kích thước.
-    """
-    if not words:
-        return []
-
-    curr_l1 = []
-    split_idx1 = 0
-    for idx, w in enumerate(words):
-        test_str = f'"{" ".join(curr_l1 + [w])}'
-        w_px = font.getbbox(test_str)[2] - font.getbbox(test_str)[0]
-        if w_px <= max_text_w:
-            curr_l1.append(w)
-            split_idx1 = idx + 1
-        else:
-            break
-
-    if split_idx1 == 0:
-        split_idx1 = 1
-
-    l1_words = words[:split_idx1]
-    rem_words = words[split_idx1:]
-
-    if not rem_words:
-        return [f'"{" ".join(l1_words)}"']
-
-    line1_text = f'"{" ".join(l1_words)}'
-
-    test_rem_str = f'{" ".join(rem_words)}"'
-    rem_w_px = font.getbbox(test_rem_str)[2] - font.getbbox(test_rem_str)[0]
-
-    if rem_w_px <= max_text_w:
-        line2_text = test_rem_str
-        return [line1_text, line2_text]
-
-    # Nếu phần từ còn lại vượt quá max_text_w -> Tách làm Dòng 2 và Dòng 3 cân đối kích thước
-    split_idx2 = max(1, len(rem_words) // 2)
-    l2_words = rem_words[:split_idx2]
-    l3_words = rem_words[split_idx2:]
-
-    line2_text = f'{" ".join(l2_words)}'
-    line3_text = f'{" ".join(l3_words)}"'
-
-    return [line1_text, line2_text, line3_text]
-
-
-def generate_top_caption_layer(
-    title_text: str,
-    output_png: Path,
-    canvas_size: Tuple[int, int] = (1080, 1440),
-    top_area_height: int = 280,
-    fallback_text: str = "",
-) -> Optional[Path]:
-    """Tạo file PNG chứa Top Caption Chữ ĐEN Bo Viền TRẮNG Nền ĐEN cho Canvas 3:4 và Nền Vàng cho Canvas 1:1 (Hỗ trợ 1-3 dòng cân đối)."""
-    if not title_text:
-        return None
-    
-    # 1. Chạy vòng lặp đảm bảo 100% số từ từ 8 đến 12 từ
-    words = ensure_caption_8_to_12_words(title_text, fallback_text)
+        words = ensure_caption_8_to_10_words(title_text, fallback_text, target_min=8, target_max=10)
 
     # Sử dụng font Montserrat-Bold.ttf
     montserrat_path = Path(__file__).parent.parent / "assets" / "fonts" / "Montserrat-Bold.ttf"
@@ -534,98 +799,124 @@ def generate_top_caption_layer(
     else:
         font_path = "C:/Windows/Fonts/arialbd.ttf"
 
-    font_size = 40
-    try:
-        font = ImageFont.truetype(font_path, font_size)
-    except Exception:
+    margin_x = 40
+    pad_w = 32
+    pad_h = 16
+    radius = 20
+    max_text_w = canvas_size[0] - margin_x * 2 - pad_w * 2  # 936px
+
+    # Tự động chọn font size cân đối từ 46pt xuống 22pt sao cho vừa khít max_text_w
+    font = None
+    lines = []
+
+    # Cho Canvas 1:1 (Style 3), ưu tiên tuyệt đối tìm font size ngắt vừa khít <= 2 dòng
+    if is_canvas_1_1:
+        for fsize in range(46, 22, -2):
+            try:
+                test_font = ImageFont.truetype(font_path, fsize)
+            except Exception:
+                test_font = ImageFont.load_default()
+
+            test_lines = format_top_caption_lines(words, test_font, max_text_w)
+            overflow = any((test_font.getbbox(l)[2] - test_font.getbbox(l)[0]) > max_text_w for l in test_lines)
+
+            if len(test_lines) <= 2 and not overflow:
+                font = test_font
+                lines = test_lines
+                break
+
+    if font is None:
+        for fsize in range(46, 22, -2):
+            try:
+                test_font = ImageFont.truetype(font_path, fsize)
+            except Exception:
+                test_font = ImageFont.load_default()
+
+            test_lines = format_top_caption_lines(words, test_font, max_text_w)
+            overflow = any((test_font.getbbox(l)[2] - test_font.getbbox(l)[0]) > max_text_w for l in test_lines)
+
+            if not overflow:
+                font = test_font
+                lines = test_lines
+                break
+
+    if font is None or font == ImageFont.load_default():
         try:
-            font = ImageFont.truetype("C:/Windows/Fonts/impact.ttf", font_size)
+            font = ImageFont.truetype(font_path, 26)
         except Exception:
             font = ImageFont.load_default()
+        lines = format_top_caption_lines(words, font, max_text_w)
 
     img = Image.new("RGBA", canvas_size, (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
 
-    # 1. Nếu là Canvas 1:1 (1080x1080): Render Dải Nền Vàng + Chữ Đen Montserrat-Bold 1-3 Dòng Cân Đối (Phong cách 3)
+    # 1. Nếu là Canvas 1:1 (1080x1080): Render Dải Nền Vàng + Chữ Đen Montserrat-Bold Cân Đối (Phong cách 3)
     if canvas_size[0] == 1080 and canvas_size[1] == 1080:
         draw.rectangle([0, 0, canvas_size[0], top_area_height], fill=(255, 255, 0, 255))
 
-        margin_x = 40
-        max_text_w = canvas_size[0] - margin_x * 2  # 1000px
+        try:
+            ascent, descent = font.getmetrics()
+            line_h = ascent + descent
+        except Exception:
+            line_h = 42
 
-        lines = format_top_caption_lines(words, font, max_text_w)
         bboxes = [font.getbbox(l) for l in lines]
         widths = [b[2] - b[0] for b in bboxes]
-        heights = [b[3] - b[1] for b in bboxes]
 
-        line_gap = 6 if len(lines) == 3 else 10
-        total_h = sum(heights) + line_gap * (len(lines) - 1)
-        start_y = max(8, (top_area_height - total_h) // 2)
-
-        curr_y = start_y
-        for i, line_str in enumerate(lines):
-            w = widths[i]
-            h = heights[i]
-            x_pos = (canvas_size[0] - w) // 2
-            draw.text((x_pos, curr_y), line_str, font=font, fill=(0, 0, 0, 255))
-            curr_y += h + line_gap
-
-        logger.info(f"Đã tạo PNG Top Caption Dải Nền Vàng Chữ Đen Montserrat-Bold ({len(lines)} Dòng - Style 3): {output_png}")
-
-    # 2. Nếu là Canvas 3:4 (1080x1440): Render 1-3 LINE CONTOUR WHITE BADGE BO VIỀN ÔM THEO TỪNG DÒNG (Style 4)
-    else:
-        margin_x = 40
-        pad_w_l1 = 20
-        pad_w_other = 30
-        pad_h = 14
-        radius = 18
-
-        max_text_w_l1 = canvas_size[0] - margin_x * 2 - pad_w_l1 * 2  # 960px
-
-        lines = format_top_caption_lines(words, font, max_text_w_l1)
-        bboxes = [font.getbbox(l) for l in lines]
-        widths = [b[2] - b[0] for b in bboxes]
-        heights = [b[3] - b[1] for b in bboxes]
-
-        # Khung Dòng 1: Full width lề 40px (1000px). Các dòng sau contour theo chữ
-        box1_x1 = margin_x
-        box1_x2 = canvas_size[0] - margin_x
-        box1_h = heights[0] + pad_h * 2
-
-        boxes = [(box1_x1, box1_x2, box1_h)]
-
-        for i in range(1, len(lines)):
-            bw = widths[i] + pad_w_other * 2
-            bh = heights[i] + pad_h * 2
-            bx1 = (canvas_size[0] - bw) // 2
-            bx2 = bx1 + bw
-            boxes.append((bx1, bx2, bh))
-
-        total_h = sum(b[2] for b in boxes) - 8 * (len(boxes) - 1)
+        line_gap = 10
+        total_h = len(lines) * line_h + line_gap * (len(lines) - 1)
         start_y = max(10, (top_area_height - total_h) // 2)
 
         curr_y = start_y
         for i, line_str in enumerate(lines):
-            bx1, bx2, bh = boxes[i]
-            by1 = curr_y
-            by2 = by1 + bh
+            w = widths[i]
+            x_pos = (canvas_size[0] - w) // 2
+            draw.text((x_pos, curr_y), line_str, font=font, fill=(0, 0, 0, 255))
+            curr_y += line_h + line_gap
 
-            draw.rounded_rectangle([bx1, by1, bx2, by2], radius=radius, fill=(255, 255, 255, 255))
+        logger.info(f"Đã tạo PNG Top Caption Dải Nền Vàng Chữ Đen Montserrat-Bold ({len(lines)} Dòng - Style 3): {output_png}")
 
-            if i > 0:
-                prev_bx1, prev_bx2, _ = boxes[i - 1]
-                min_x = max(bx1, prev_bx1) + radius
-                max_x = min(bx2, prev_bx2) - radius
-                if max_x > min_x:
-                    draw.rectangle([min_x, by1 - 8, max_x, by1 + 8], fill=(255, 255, 255, 255))
+    # 2. Nếu là Canvas 3:4 (1080x1440): Render White Rounded Badge cân đối uốn lượn (Style 4)
+    else:
+        bboxes = [font.getbbox(l) for l in lines]
+        widths = [b[2] - b[0] for b in bboxes]
+        heights = [b[3] - b[1] for b in bboxes]
 
-            text_x = (canvas_size[0] - widths[i]) // 2
-            text_y = by1 + pad_h
+        line_overlap = 6
+        line_boxes = []
+        total_badge_h = 0
+        for i, (w, h) in enumerate(zip(widths, heights)):
+            box_w = w + pad_w * 2
+            box_h = h + pad_h * 2
+            line_boxes.append((box_w, box_h))
+            if i == 0:
+                total_badge_h += box_h
+            else:
+                total_badge_h += box_h - line_overlap
+
+        start_y = max(10, (top_area_height - total_badge_h) // 2)
+
+        # 1. Vẽ các khung rounded rectangle đè nhẹ liên tục trên cùng 1 lớp ảnh
+        line_coords = []
+        curr_y = start_y
+        for i, (box_w, box_h) in enumerate(line_boxes):
+            box_x1 = (canvas_size[0] - box_w) // 2
+            box_x2 = box_x1 + box_w
+            box_y1 = curr_y
+            box_y2 = box_y1 + box_h
+            line_coords.append((box_x1, box_y1, box_x2, box_y2))
+
+            draw.rounded_rectangle([box_x1, box_y1, box_x2, box_y2], radius=radius, fill=(255, 255, 255, 255))
+            curr_y += box_h - line_overlap
+
+        # 2. Render từng dòng chữ căn giữa vào đúng thẻ chữ tương ứng
+        for i, line_str in enumerate(lines):
+            box_x1, box_y1, box_x2, box_y2 = line_coords[i]
+            text_x = box_x1 + pad_w
+            text_y = box_y1 + pad_h
             draw.text((text_x, text_y), line_str, font=font, fill=(0, 0, 0, 255))
 
-            curr_y = by2 - 8
-
-        logger.info(f"Đã tạo PNG Top Caption White Badge ({len(lines)} Dòng - Style 4): {output_png}")
+        logger.info(f"Đã tạo PNG Top Caption Stepped White Badge ({len(lines)} Dòng - Style 4): {output_png}")
 
     output_png.parent.mkdir(parents=True, exist_ok=True)
     img.save(output_png, "PNG")

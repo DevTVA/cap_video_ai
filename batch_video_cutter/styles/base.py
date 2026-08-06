@@ -97,17 +97,22 @@ class BaseStyle(ABC):
         return "Impact"
 
     def get_font_size(self) -> int:
-        """Kích thước font chữ mặc định cho style."""
-        return 85
+        """Kích thước font chữ mặc định cho style (66pt bằng tỉ lệ cỡ chữ Outcard)."""
+        return 66
 
 
     def get_highlight_color(self) -> str:
         """Màu Highlight từ active ("green", "red", "yellow")."""
-        return "green"
+        return "yellow"
 
     def get_italic_option(self) -> bool:
         """Có nghiêng chữ (Italic Slant) hay không."""
         return False
+
+    def get_max_clips(self) -> Optional[int]:
+        """Số lượng clip viral tối đa cần cắt cho style này (None: mặc định từ config)."""
+        return None
+
 
     def format_ass_filter(self, subtitle_path: str) -> str:
         """Tạo chuỗi filter ass='path':fontsdir='fonts_dir' cho FFmpeg."""

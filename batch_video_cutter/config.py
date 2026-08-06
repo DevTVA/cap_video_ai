@@ -9,8 +9,8 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-DEFAULT_INPUT_DIR = Path(r"C:\Users\Admin\Desktop\output")
-DEFAULT_OUTPUT_DIR = Path(r"C:\Users\Admin\Desktop\output\final_clips")
+DEFAULT_INPUT_DIR = Path(r"E:\output")
+DEFAULT_OUTPUT_DIR = Path(r"E:\output\final_clips")
 
 
 @dataclass

@@ -76,6 +76,9 @@ def cut_and_render_clip(
     ]
     current_input_idx = 1
 
+    outcard_dur = 2.113
+    outcard_start_s = max(0.0, duration - outcard_dur) if (outcard_path and Path(outcard_path).exists()) else None
+
     # Render Graphic Subtitle PNG Layer (Text + Color Emoji màu) hoặc Emoji PNG đơn lẻ
     if timed_emojis:
         last_label = output_label.strip("[]")
@@ -86,6 +89,12 @@ def cut_and_render_clip(
             png_p = Path(png_path).resolve()
             if not png_p.exists():
                 continue
+
+            is_top_caption = "top_caption" in png_p.name
+            if outcard_start_s is not None and not is_top_caption:
+                if start_s >= outcard_start_s:
+                    continue
+                end_s = min(end_s, outcard_start_s)
 
             inputs.extend(["-i", str(png_p)])
             out_label = f"v_out_{current_input_idx}"

@@ -66,6 +66,6 @@ class Style2(BaseStyle):
         return "red"
 
     def get_font_size(self) -> int:
-        """Kích thước font chữ cho Style 2 (92pt)."""
-        return 92
+        """Kích thước font chữ cho Style 2 (66pt bằng tỉ lệ cỡ chữ Outcard)."""
+        return 66
 

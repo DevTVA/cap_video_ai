@@ -14,6 +14,7 @@ ENV/
 # Project output, scratch files, and cache
 final_clips/
 g_subs_tmp/
+.cache/
 scratch/
 emojis_cache/
 *.ass

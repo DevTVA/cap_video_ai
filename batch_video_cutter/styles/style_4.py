@@ -78,12 +78,17 @@ class Style4(BaseStyle):
         return "bottom"
 
     def get_highlight_color(self) -> str:
-        """Màu Highlight MÀU XANH LÁ ("green") chuẩn 100% theo mẫu phong cách 4.mp4."""
-        return "green"
+        """Màu Highlight MÀU VÀNG ("yellow")."""
+        return "yellow"
 
     def get_font_size(self) -> int:
-        """Cỡ font 85pt chuẩn CapCut."""
-        return 85
+        """Cỡ font 66pt bằng tỉ lệ cỡ chữ Outcard."""
+        return 66
 
     def get_italic_option(self) -> bool:
         return False
+
+    def get_max_clips(self) -> Optional[int]:
+        """Phong cách 4 cắt 4 đoạn viral."""
+        return 4
+

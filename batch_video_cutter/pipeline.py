@@ -134,15 +134,16 @@ class PipelineOrchestrator:
                 style = resolve_style_for_folder(video_info.folder_index, self.style_mapping)
                 logger.info(f"Sử dụng {style.name} cho folder [{video_info.folder_name}]")
 
-                # Phong cách 1 & 2: Bỏ 10s đầu (intro) và 25s cuối (outro). Phong cách 3 & 4: dùng toàn bộ transcript
-                if "Style 1" in style.name or "Style 2" in style.name or getattr(style, "aspect_ratio", "") in ["1:1_blur", "3:4_blur"]:
-                    intro_offset = 10.0
-                    outro_offset = 25.0
-                    max_valid_end = max(0.0, transcript.duration - outro_offset)
-                    logger.info(f"Giới hạn khoảng cắt cho {style.name}: Bỏ 10s đầu và 25s cuối (Chỉ cắt từ {intro_offset:.1f}s đến {max_valid_end:.1f}s)")
-                else:
-                    intro_offset = 0.0
-                    outro_offset = 0.0
+                # Áp dụng cho TẤT CẢ Phong cách (Style 1, 2, 3, 4): Bỏ 35s đầu (intro dẫn chuyện/kênh) và 25s cuối (outro) để tránh tuyệt đối dính intro video gốc
+                intro_offset = 35.0
+                outro_offset = 25.0
+                max_valid_end = max(0.0, transcript.duration - outro_offset)
+                logger.info(f"Giới hạn khoảng cắt cho {style.name}: Bỏ {intro_offset:.1f}s đầu (giới thiệu/kênh) và {outro_offset:.1f}s cuối (Chỉ cắt từ {intro_offset:.1f}s đến {max_valid_end:.1f}s)")
+
+                # Xác định số lượng clip tối đa theo style (Style 3 & Style 4 cắt 4 đoạn viral)
+                style_max_clips = getattr(style, "get_max_clips", lambda: None)()
+                max_clips = style_max_clips if style_max_clips is not None else self.config.max_clips_per_video
+                logger.info(f"Số lượng đoạn viral clip cắt cho {style.name}: {max_clips}")
 
                 # 3. Phân tích viral segments qua LLM API với bộ lọc Intro/Outro
                 transcript_text = format_transcript_for_llm(transcript, intro_offset=intro_offset, outro_offset=outro_offset)
@@ -150,7 +151,7 @@ class PipelineOrchestrator:
                     None,
                     analyze_transcript,
                     transcript_text,
-                    self.config.max_clips_per_video,
+                    max_clips,
                     self.config.gemini_api_key,
                     self.prompt_template,
                     transcript.duration,
@@ -174,6 +175,8 @@ class PipelineOrchestrator:
                     with tempfile.TemporaryDirectory() as tmp_dir:
                         sub_path = Path(tmp_dir) / f"sub_{clip_idx}.ass"
                         sub_position = style.get_subtitle_position()
+                        clip_dur = seg.end_time - seg.start_time
+                        outcard_start_s = max(0.0, clip_dur - 2.113)
 
                         # Tạo subtitles chuẩn theo style với độ phân giải canvas chuẩn xác
                         sub_path, timed_emojis = await loop.run_in_executor(
@@ -186,27 +189,36 @@ class PipelineOrchestrator:
                                 output_path=sub_path,
                                 position=sub_position,
                                 font_name=getattr(style, "get_font_name", lambda: "Montserrat Black")(),
-                                font_size=getattr(style, "get_font_size", lambda: 85)(),
-                                highlight_color_name=getattr(style, "get_highlight_color", lambda: "green")(),
+                                font_size=getattr(style, "get_font_size", lambda: 66)(),
+                                highlight_color_name=getattr(style, "get_highlight_color", lambda: "yellow")(),
                                 italic=getattr(style, "get_italic_option", lambda: False)(),
                                 add_emojis=True,
                                 canvas_size=style.get_output_resolution(),
+                                outcard_start_s=outcard_start_s,
                             )
                         )
 
-                        # Đảm bảo 100% video Style 3 & Style 4 đều có Top Caption (nếu thiếu title_en/vi thì tự lấy reason hoặc text thoại để chạy vòng lặp 8-12 từ)
-                        title_text = seg.title_en or seg.title_vi or getattr(seg, "reason", "") or seg.text
+                        # Đảm bảo 100% video Top Caption Badge CHỈ sử dụng Tiếng Anh (title_en)
+                        from batch_video_cutter.utils.graphic_subtitle import clean_caption_text
+                        has_vi_chars = lambda s: any(c in str(s).lower() for c in "àáảãạăằắẳẵặâầấẩẫậèéẻẽẹêềếểễệìíỉĩịòóỏõọôồốổỗộơờớởỡợùúủũụưừứửữựỳýỷỹỵđ")
+                        title_text_en = clean_caption_text(seg.title_en)
+                        if not title_text_en or has_vi_chars(title_text_en):
+                            clean_en_words = [w for w in re.sub(r"[^\w\s]", "", str(title_text_en)).split() if not has_vi_chars(w) and len(w) > 1]
+                            if clean_en_words:
+                                title_text_en = clean_caption_text(" ".join(clean_en_words[:10]).upper() + " 💥")
+                            else:
+                                title_text_en = "HIGHLIGHT VIRAL SCENE 💥"
+
                         if getattr(style, "get_caption_area", lambda: None)():
                             from batch_video_cutter.utils.graphic_subtitle import generate_top_caption_layer
                             top_cap_png = Path(tmp_dir) / f"top_caption_{clip_idx}.png"
                             canvas_res = style.get_output_resolution()
                             top_area_h = 180 if canvas_res[1] == 1080 else 280
                             cap_png_path = generate_top_caption_layer(
-                                title_text,
+                                title_text_en,
                                 output_png=top_cap_png,
                                 canvas_size=canvas_res,
                                 top_area_height=top_area_h,
-                                fallback_text=getattr(seg, "text", ""),
                             )
                             if cap_png_path and cap_png_path.exists():
                                 clip_dur = seg.end_time - seg.start_time
@@ -224,7 +236,7 @@ class PipelineOrchestrator:
                                 style=style,
                                 subtitle_path=sub_path,
                                 timed_emojis=timed_emojis,
-                                title_text=title_text,
+                                title_text=title_text_en,
                             )
                         )
 
@@ -232,7 +244,9 @@ class PipelineOrchestrator:
                     # Lưu thông tin cho file tiêu đề
                     item_info = {
                         "filename": clip_filename,
-                        "title": seg.title_en or seg.title_vi,
+                        "title_en": title_text_en,
+                        "title_vi": seg.title_vi or "",
+                        "title": title_text_en,
                         "folder_name": video_info.folder_name,
                         "start_time": seg.start_time,
                         "end_time": seg.end_time,
@@ -327,15 +341,28 @@ class PipelineOrchestrator:
             "",
         ]
 
-        from batch_video_cutter.utils.graphic_subtitle import censor_sensitive_words
+        from batch_video_cutter.utils.graphic_subtitle import clean_caption_text, censor_sensitive_words
+
+        has_vi_chars = lambda s: any(c in str(s).lower() for c in "àáảãạăằắẳẵặâầấẩẫậèéẻẽẹêềếểễệìíỉĩịòóỏõọôồốổỗộơờớởỡợùúủũụưừứửữựỳýỷỹỵđ")
+        seen_titles = set()
 
         for stt, item in enumerate(results_list, 1):
-            clean_title = censor_sensitive_words(item.get('title', ''))
+            raw_title_en = item.get('title_en', '') or item.get('title', '')
+            cleaned = clean_caption_text(raw_title_en)
+            if not cleaned or has_vi_chars(cleaned):
+                clean_en_words = [w for w in re.sub(r"[^\w\s]", "", str(raw_title_en)).split() if not has_vi_chars(w) and len(w) > 1]
+                if clean_en_words:
+                    cleaned = clean_caption_text(" ".join(clean_en_words[:10]).upper() + " 💥")
+                else:
+                    cleaned = "HIGHLIGHT VIRAL SCENE 💥"
+            
+            clean_title_en = censor_sensitive_words(cleaned).lower()
+            
             lines.append(f"[{item['filename']}]")
             lines.append(f"File Output       : {item['filename']}")
-            lines.append(f"Tiêu Đề / Caption  : {clean_title}")
             lines.append(f"Folder Video Gốc  : {item['folder_name']}")
             lines.append(f"Timestamp Đoạn Cắt : {item['start_time']:.1f}s -> {item['end_time']:.1f}s")
+            lines.append(f"Top Badge / Caption : {clean_title_en}")
             if item.get("reason"):
                 lines.append(f"Lý Do Chọn Clip   : {item['reason']}")
             lines.append("-" * 80)

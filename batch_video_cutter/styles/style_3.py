@@ -86,8 +86,13 @@ class Style3(BaseStyle):
         return "red"
 
     def get_font_size(self) -> int:
-        """Cỡ font 85pt chuẩn CapCut."""
-        return 85
+        """Cỡ font 66pt bằng tỉ lệ cỡ chữ Outcard."""
+        return 66
 
     def get_italic_option(self) -> bool:
         return False
+
+    def get_max_clips(self) -> Optional[int]:
+        """Phong cách 3 cắt 4 đoạn viral."""
+        return 4
+
