@@ -1,7 +1,7 @@
 # Video Subtitle & Outcard Processing
 
-> Tổng hợp kiến thức về hệ thống Phụ đề đồ họa Graphic Subtitle Layer, Emoji màu, Top Caption Badge, tăng âm lượng 1.3x và Outcard overlay trong dự án.
-> Cập nhật lần cuối: 2026-08-01
+> Tổng hợp kiến thức về hệ thống Phụ đề đồ họa Graphic Subtitle Layer, Emoji màu, Top Caption Badge, Phong cách 5 (Blue Header), tăng âm lượng 1.3x và Outcard overlay trong dự án.
+> Cập nhật lần cuối: 2026-08-09
 
 ---
 
@@ -12,10 +12,17 @@
 - **Chi tiết**: Phụ đề chữ (kèm 3 màu active word highlight, viền đen mập 8px 2-pass solid stroke) và ảnh HD 3D Color PNG Emoji được render trực tiếp lên **1 tấm ảnh PNG trong suốt (RGBA)** cho mỗi mốc thoại. Đã khôi phục chuẩn bản Commit 1 với `chunk_size = 4`, tự động chia 2 dòng căn giữa giúp phụ đề rõ ràng, đẹp mắt và đúng nguyên bản.
 - **Files liên quan**: `batch_video_cutter/utils/graphic_subtitle.py`, `batch_video_cutter/utils/subtitle.py`
 
-### Top Caption Stepped Contour Rounded Badge & Giới hạn 8 - 12 Từ (Style 4)
-- **Ngày**: 2026-07-28
-- **Chi tiết**: Style 4 dùng Canvas 3:4 (1080x1440) kèm Stepped Contour White Badge uốn lượn uốn góc theo từng dòng (`radius=18`), lề 40px hai bên (max text width 940px), font Montserrat-Bold 40pt. Các dòng chữ được vẽ các khung rounded rectangle đè nhẹ 6px nối liền trên cùng một lớp ảnh trước khi vẽ chữ, tạo dải nền trắng uốn lượn uốn góc liền khối 100% không đứt đoạn và không bị tách rời thành nhiều thẻ độc lập. Số từ Top Caption được đảm bảo nghiêm ngặt từ **8 đến 12 từ**.
-- **Files liên quan**: `batch_video_cutter/utils/graphic_subtitle.py`, `batch_video_cutter/styles/style_4.py`
+### Top Caption Stepped Contour Rounded Badge & Giới hạn 7 - 8 Từ & 2 Dòng Cân Đối (Style 3 & Style 4)
+- **Ngày**: 2026-08-09
+- **Chi tiết**: Đồng bộ tiêu đề Top Caption cho cả Phong cách 3 (Canvas 1:1) và Phong cách 4 (Canvas 3:4 1080x1440):
+  1. Giới hạn số từ hiển thị ở mức **7 đến 8 từ** (`target_min=7, target_max=8`). Phần từ thừa vượt quá 8 từ sẽ được tự động cắt bớt.
+  2. Vòng lặp dò font size tự động từ 46pt xuống 22pt trong `generate_top_caption_layer()` ưu tiên tuyệt đối việc hiển thị tiêu đề ngắt thành **chính xác 2 dòng cân đối** (`len(lines) <= 2`), vừa khít chiều rộng khung chữ và giữ thẩm mỹ dải nền (Dải Nền Vàng cho Style 3 & White Rounded Badge uốn lượn cho Style 4).
+- **Files liên quan**: `batch_video_cutter/utils/graphic_subtitle.py`, `batch_video_cutter/styles/style_3.py`, `batch_video_cutter/styles/style_4.py`
+
+### Phong cách 5 (Style 5 - Canvas 3:4 Blue Header White Title)
+- **Ngày**: 2026-08-09
+- **Chi tiết**: Phong cách 5 kế thừa khung hình Canvas 3:4 (`1080x1440`), Video Zoom 150% CapCut style và phụ đề Impact highlight màu vàng từ Phong cách 4. Điểm khác biệt là Top Caption có **Dải nền Xanh Dương (`RGB 85, 118, 251` / `#5576FB`)** chiều cao 280px, tiêu đề Montserrat-Bold chữ **TRẮNG** in hoa căn giữa 2 dòng cân đối (không dùng White Badge bo góc và không có dấu nháy kép).
+- **Files liên quan**: `batch_video_cutter/styles/style_5.py`, `batch_video_cutter/styles/factory.py`, `batch_video_cutter/utils/graphic_subtitle.py`
 
 ### Phân Tách Định Dạng Caption 100% Tiếng Anh Giữa Video và File Summary
 - **Ngày**: 2026-08-01
@@ -32,6 +39,13 @@
 ---
 
 ## Bugs & Solutions
+
+### Bỏ Quên Outcard & Âm Lượng Do Sai Đường Dẫn Tự Động Tìm File Outcard.mp4
+- **Ngày**: 2026-08-09
+- **Vấn đề**: Video xuất ra bị thiếu Outcard đè ở 2.113s cuối clip và âm lượng thoại không được tăng 1.3x.
+- **Root cause**: `engine.py` và `pipeline.py` trước đây chỉ quét tìm `outcard.mp4` tại đường dẫn hardcode `e:\AI_Agent\outcard.mp4`, trong khi file thực tế nằm ở `E:\cap_video\outcard.mp4`. Kết quả là `outcard_path` bị `None` nên FFmpeg bỏ qua filter overlay outcard.
+- **Fix**: Mở rộng danh sách ứng viên quét tự động `outcard.mp4` (`E:\cap_video\outcard.mp4`, `E:\output\outcard.mp4`, `input_dir/outcard.mp4`, v.v.) trong `PipelineOrchestrator` và `engine.py`. Đồng thời bổ sung công thức căn giữa Outcard overlay theo chiều dọc canvas (`overlay=x=0:y=180` trên Canvas 3:4 `1080x1440`).
+- **Files liên quan**: `batch_video_cutter/core/engine.py`, `batch_video_cutter/pipeline.py`
 
 ### Emoji Nằm Sai Vị Trí Ở Đầu/Giữa Câu Caption
 - **Ngày**: 2026-08-01
@@ -68,6 +82,13 @@
 
 ## How-To
 
+### Cấu Hình Range Mapping Phong Cách Cho Folder (Ví dụ Style 5 cho folder 49-54)
+- **Ngày**: 2026-08-09
+- **Bước thực hiện**:
+  1. Khai báo chuỗi mapping phong cách trong `style_mapping_str` của `config.py` (ví dụ: `1-12:1,13-24:2,25-36:4,37-48:3,49-54:5`).
+  2. Đồng bộ cờ `--style-map` / `-s` trong `cli.py`.
+- **Files liên quan**: `batch_video_cutter/config.py`, `batch_video_cutter/ui/cli.py`
+
 ### Quy trình Đóng gói Clip Thành phẩm & Tên Video Output
 - **Ngày**: 2026-07-27
 - **Bước thực hiện**:
@@ -89,4 +110,3 @@
 - **Ngày**: 2026-08-02
 - **Chi tiết**: Áp dụng vòng lặp re-prompt LLM API (`while True`) yêu cầu AI viết lại tiêu đề tự nhiên chuẩn 8-10 từ (8 <= word_count <= 10). TUYỆT ĐỐI KHÔNG ghép thêm các tiền tố/hậu tố rác hardcode như `SHOCKING WITNESS TESTIMONY REVEALS...` hay `REVEALED NOW`, `EXPOSED`. Mọi tiêu đề hiển thị phải là câu tự nhiên 100% do LLM sinh ra. BẮT BUỘC bóc tách toàn bộ emoji ra khỏi chuỗi text trước khi thực hiện regex xóa từ rác ở đuôi chuỗi `r"(?:\s+\b(?:EXPOSED|REVEALED|TRUTH|UNCOVERED|NOW)\b)+\s*$"`, để tránh việc emoji ở cuối câu làm trượt regex match.
 - **Files liên quan**: `batch_video_cutter/core/analyzer.py`, `batch_video_cutter/utils/graphic_subtitle.py`, `scipt.txt`
-

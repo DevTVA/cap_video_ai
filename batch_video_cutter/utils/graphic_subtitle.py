@@ -8,6 +8,8 @@ Ensures 100% frame-accurate timing and exact pixel positioning.
 """
 
 import re
+import random
+from collections import deque
 from pathlib import Path
 from typing import List, Tuple, Optional
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
@@ -568,20 +570,97 @@ def clean_caption_text(text: str) -> str:
     text = re.sub(r"\s*[\(\[\{]\s*\d+\s*TỪ\s*[\)\]\}]", "", text, flags=re.IGNORECASE)
     text = re.sub(r"\b\d{1,2}:\d{2}\s*[\:\-]\s*\d{1,2}:\d{2}\b", "", text)
 
+class EmojiTracker:
+    """Theo dõi vết các emoji đã sử dụng trong phiên làm việc để xoay tua chống trùng lặp."""
+    def __init__(self, max_history: int = 15):
+        self.max_history = max_history
+        self.history: deque = deque(maxlen=max_history)
+
+    def is_recently_used(self, emoji: str) -> bool:
+        return emoji in self.history
+
+    def add(self, emoji: str):
+        if emoji:
+            self.history.append(emoji)
+
+    def select_emoji(self, candidate_emojis: List[str]) -> str:
+        """Chọn 1 emoji ngẫu nhiên chưa nằm trong history và có file PNG tồn tại."""
+        from .emoji_manager import get_emoji_png_path
+
+        valid_candidates = []
+        for e in candidate_emojis:
+            png_path = get_emoji_png_path(e)
+            if png_path and png_path.exists():
+                valid_candidates.append(e)
+
+        if not valid_candidates:
+            return "💥"
+
+        unused = [e for e in valid_candidates if e not in self.history]
+        if unused:
+            chosen = random.choice(unused)
+        else:
+            chosen = random.choice(valid_candidates)
+
+        self.add(chosen)
+        return chosen
+
+    def clear(self):
+        self.history.clear()
+
+
+# Global tracker instance cho toàn ứng dụng
+GLOBAL_EMOJI_TRACKER = EmojiTracker(max_history=15)
+
 EMOJIS_KEYWORD_MAP = [
-    (r"\b(judge|court|sues|sued|verdict|lawyer|plaintiff|defendant|rules|rule)\b", ["⚖️", "💥", "😳"]),
-    (r"\b(money|scam|scammed|pay|paid|rent|deposit|cash|dollar|\$)\b", ["💰", "⚡", "💸"]),
-    (r"\b(cheating|cheat|cheated|boyfriend|girlfriend|wife|husband|affair|romance|marriage|divorce|infidelity)\b", ["💔", "😳", "😱"]),
-    (r"\b(shocking|truth|secret|secrets|reveals|revealed|exposes|exposed|caught|drama|fight|confronts|confronted)\b", ["💥", "😱", "💣", "😳"]),
-    (r"\b(fight|attack|damage|broken|slap|police|arrest|arrested)\b", ["🚨", "💥", "⚡"]),
+    (
+        r"\b(judge|court|sues|sued|verdict|lawyer|plaintiff|defendant|rules|rule|lawsuit|attorney|legal|guilty|jail|prison|sentence)\b",
+        ["⚖️", "📜", "🏛️", "💼", "🚨", "😳", "🛑", "📄", "🔑"],
+    ),
+    (
+        r"\b(money|scam|scammed|pay|paid|rent|deposit|cash|dollar|\$|wealth|rich|poor|bank|loan|stolen|steal|stole|gold|crypto|cost|price|bill|bills|bankrupt)\b",
+        ["💰", "💸", "💵", "💳", "🤑", "💎", "⚡", "🏦", "📉", "📈"],
+    ),
+    (
+        r"\b(cheating|cheat|cheated|boyfriend|girlfriend|wife|husband|affair|romance|marriage|divorce|infidelity|ex|ex-wife|ex-husband|lover|breakup|dating|kiss)\b",
+        ["💔", "😳", "😱", "🥀", "😭", "👿", "🤐", "🤦‍♂️", "🤦‍♀️"],
+    ),
+    (
+        r"\b(shocking|truth|secret|secrets|reveals|revealed|exposes|exposed|caught|drama|fight|confronts|confronted|hidden|mystery|uncovered|scandal|lies|liar|lied)\b",
+        ["💥", "😱", "💣", "😳", "🤯", "🚨", "🤫", "🔍", "👀", "⚡", "🗣️", "🔥", "✨"],
+    ),
+    (
+        r"\b(fight|attack|damage|broken|slap|police|arrest|arrested|cop|cops|weapon|gun|knife|danger|blood|hit|slapped|punch|punched|threat|threatened)\b",
+        ["🚨", "💥", "⚡", "🥊", "🛑", "👮‍♂️", "😤", "😡", "🤬", "💣"],
+    ),
+    (
+        r"\b(work|office|boss|job|fired|company|employee|manager|hire|hired|interview|ceo|owner|business)\b",
+        ["💼", "🏢", "📋", "😤", "📈", "📉", "🔥", "🗣️", "💻", "📁"],
+    ),
+    (
+        r"\b(family|house|home|neighbor|neighbors|mom|dad|mother|father|son|daughter|sister|brother|aunt|uncle|grandma|grandpa|in-laws|landlord)\b",
+        ["🏠", "🏡", "🔑", "🚪", "👴", "👵", "👶", "👥"],
+    ),
+    (
+        r"\b(angry|mad|furious|crying|cried|tears|laugh|laughing|crazy|insane|psycho|evil|funny|hilarious)\b",
+        ["😭", "😡", "🤬", "🤣", "😂", "😈", "🤡", "💩", "👿", "🤯"],
+    ),
 ]
-FALLBACK_EMOJIS = ["💥", "🔥", "⚡", "😱", "😳", "🚀", "🤫"]
+
+GLOBAL_FALLBACK_EMOJIS = [
+    "💥", "🔥", "⚡", "😱", "😳", "🚀", "🤫", "🤯", "💣", "🚨",
+    "👀", "✨", "🔍", "🗣️", "💎", "💰", "💸", "😭", "😡", "😈",
+    "🤡", "🥊", "🛑", "🔑", "🚪", "📜", "💼", "🏠", "🌟"
+]
 
 
-def ensure_caption_has_emoji(text: str) -> str:
-    """Đảm bảo tiêu đề luôn có ít nhất 1 emoji nổi bật và TOÀN BỘ emoji luôn nằm ở CUỐI chuỗi."""
+def ensure_caption_has_emoji(text: str, tracker: Optional[EmojiTracker] = None) -> str:
+    """Đảm bảo tiêu đề luôn có ít nhất 1 emoji nổi bật và TOÀN BỘ emoji luôn nằm ở CUỐI chuỗi (Anti-Repetition Pool)."""
     if not text:
         return text
+
+    if tracker is None:
+        tracker = GLOBAL_EMOJI_TRACKER
 
     emoji_pattern = re.compile(
         r"[\U00010000-\U0010FFFF\u2600-\u27BF\u2300-\u23FF\u2B00-\u2BFF\uFE00-\uFE0F]+",
@@ -592,16 +671,24 @@ def ensure_caption_has_emoji(text: str) -> str:
     text_clean = emoji_pattern.sub("", text)
     text_clean = re.sub(r"\s+", " ", text_clean).strip()
 
-    if found_emojis:
-        emojis_str = " ".join(found_emojis)
-        return f"{text_clean} {emojis_str}".strip() if text_clean else emojis_str
+    # Kiểm tra nếu emoji tìm thấy không phải đơn thuần là fallback dummy (💥) và chưa bị lặp lại gần đây
+    non_dummy_emojis = [e for e in found_emojis if e != "💥" and not tracker.is_recently_used(e)]
 
+    if non_dummy_emojis:
+        chosen_emoji = non_dummy_emojis[0]
+        tracker.add(chosen_emoji)
+        return f"{text_clean} {chosen_emoji}".strip() if text_clean else chosen_emoji
+
+    # Nếu không có emoji hoặc chỉ có dummy 💥 / emoji lặp lại -> Chọn emoji mới từ Pool theo chủ đề
     t_lower = text_clean.lower()
     for pattern, emoji_list in EMOJIS_KEYWORD_MAP:
         if re.search(pattern, t_lower):
-            return f"{text_clean} {emoji_list[0]}".strip() if text_clean else emoji_list[0]
+            chosen = tracker.select_emoji(emoji_list)
+            return f"{text_clean} {chosen}".strip() if text_clean else chosen
 
-    return f"{text_clean} 💥".strip() if text_clean else "💥"
+    # Fallback từ bộ GLOBAL_FALLBACK_EMOJIS
+    chosen_fallback = tracker.select_emoji(GLOBAL_FALLBACK_EMOJIS)
+    return f"{text_clean} {chosen_fallback}".strip() if text_clean else chosen_fallback
 
 
 def clean_caption_text(text: str) -> str:
@@ -780,17 +867,14 @@ def generate_top_caption_layer(
     canvas_size: Tuple[int, int] = (1080, 1440),
     top_area_height: int = 280,
     fallback_text: str = "",
+    style_index: int = 4,
 ) -> Optional[Path]:
-    """Tạo file PNG chứa Top Caption Chữ ĐEN Bo Viền TRẮNG Nền ĐEN cho Canvas 3:4 và Nền Vàng cho Canvas 1:1."""
+    """Tạo file PNG chứa Top Caption cho Canvas 3:4 và 1:1 theo từng Phong cách (Style 3 Nền Vàng, Style 4 White Badge, Style 5 Dải Nền Xanh Dương)."""
     if not title_text:
         return None
     
-    # Canvas 1:1 (Style 3, 1080x1080) dùng 7-8 từ để hiển thị chuẩn 2 dòng cân đối, lề trên dưới thoáng rộng
-    is_canvas_1_1 = (canvas_size[0] == 1080 and canvas_size[1] == 1080) or top_area_height <= 180
-    if is_canvas_1_1:
-        words = ensure_caption_8_to_10_words(title_text, fallback_text, target_min=7, target_max=8)
-    else:
-        words = ensure_caption_8_to_10_words(title_text, fallback_text, target_min=8, target_max=10)
+    # Cho cả Canvas 1:1 (Style 3) và Canvas 3:4 (Style 4 & 5), dùng 7-8 từ để hiển thị chuẩn 2 dòng cân đối
+    words = ensure_caption_8_to_10_words(title_text, fallback_text, target_min=7, target_max=8)
 
     # Sử dụng font Montserrat-Bold.ttf
     montserrat_path = Path(__file__).parent.parent / "assets" / "fonts" / "Montserrat-Bold.ttf"
@@ -809,21 +893,20 @@ def generate_top_caption_layer(
     font = None
     lines = []
 
-    # Cho Canvas 1:1 (Style 3), ưu tiên tuyệt đối tìm font size ngắt vừa khít <= 2 dòng
-    if is_canvas_1_1:
-        for fsize in range(46, 22, -2):
-            try:
-                test_font = ImageFont.truetype(font_path, fsize)
-            except Exception:
-                test_font = ImageFont.load_default()
+    # Ưu tiên tuyệt đối tìm font size ngắt vừa khít <= 2 dòng cân đối
+    for fsize in range(46, 22, -2):
+        try:
+            test_font = ImageFont.truetype(font_path, fsize)
+        except Exception:
+            test_font = ImageFont.load_default()
 
-            test_lines = format_top_caption_lines(words, test_font, max_text_w)
-            overflow = any((test_font.getbbox(l)[2] - test_font.getbbox(l)[0]) > max_text_w for l in test_lines)
+        test_lines = format_top_caption_lines(words, test_font, max_text_w)
+        overflow = any((test_font.getbbox(l)[2] - test_font.getbbox(l)[0]) > max_text_w for l in test_lines)
 
-            if len(test_lines) <= 2 and not overflow:
-                font = test_font
-                lines = test_lines
-                break
+        if len(test_lines) <= 2 and not overflow:
+            font = test_font
+            lines = test_lines
+            break
 
     if font is None:
         for fsize in range(46, 22, -2):
@@ -850,7 +933,7 @@ def generate_top_caption_layer(
     img = Image.new("RGBA", canvas_size, (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
 
-    # 1. Nếu là Canvas 1:1 (1080x1080): Render Dải Nền Vàng + Chữ Đen Montserrat-Bold Cân Đối (Phong cách 3)
+    # 1. Phong cách 3 (Canvas 1:1 1080x1080): Render Dải Nền Vàng + Chữ Đen Montserrat-Bold Cân Đối
     if canvas_size[0] == 1080 and canvas_size[1] == 1080:
         draw.rectangle([0, 0, canvas_size[0], top_area_height], fill=(255, 255, 0, 255))
 
@@ -876,7 +959,35 @@ def generate_top_caption_layer(
 
         logger.info(f"Đã tạo PNG Top Caption Dải Nền Vàng Chữ Đen Montserrat-Bold ({len(lines)} Dòng - Style 3): {output_png}")
 
-    # 2. Nếu là Canvas 3:4 (1080x1440): Render White Rounded Badge cân đối uốn lượn (Style 4)
+    # 2. Phong cách 5: Canvas 3:4 với Dải Nền Xanh Dương (RGB 85, 118, 251) + Chữ Trắng In Hoa Montserrat-Bold (Chuẩn phong cách 5.mp4)
+    elif style_index == 5:
+        # Draw top blue banner (solid fill #5576FB)
+        draw.rectangle([0, 0, canvas_size[0], top_area_height], fill=(85, 118, 251, 255))
+
+        clean_lines = [l.replace('"', '').strip() for l in lines]
+        try:
+            ascent, descent = font.getmetrics()
+            line_h = ascent + descent
+        except Exception:
+            line_h = 42
+
+        bboxes = [font.getbbox(l) for l in clean_lines]
+        widths = [b[2] - b[0] for b in bboxes]
+
+        line_gap = 10
+        total_h = len(clean_lines) * line_h + line_gap * (len(clean_lines) - 1)
+        start_y = max(10, (top_area_height - total_h) // 2)
+
+        curr_y = start_y
+        for i, line_str in enumerate(clean_lines):
+            w = widths[i]
+            x_pos = (canvas_size[0] - w) // 2
+            draw.text((x_pos, curr_y), line_str, font=font, fill=(255, 255, 255, 255))
+            curr_y += line_h + line_gap
+
+        logger.info(f"Đã tạo PNG Top Caption Dải Nền Xanh Chữ Trắng Montserrat-Bold ({len(clean_lines)} Dòng - Style 5): {output_png}")
+
+    # 3. Phong cách 4: Canvas 3:4 (1080x1440) White Rounded Badge cân đối uốn lượn
     else:
         bboxes = [font.getbbox(l) for l in lines]
         widths = [b[2] - b[0] for b in bboxes]

@@ -19,7 +19,7 @@ class AppConfig:
 
     input_dir: Path = field(default_factory=lambda: DEFAULT_INPUT_DIR)
     output_dir: Path = field(default_factory=lambda: DEFAULT_OUTPUT_DIR)
-    style_mapping_str: str = "1-12:1,13-24:2,25-36:4,37-48:3"
+    style_mapping_str: str = "1-12:1,13-24:2,25-36:4,37-48:3,49-54:5"
     max_clips_per_video: int = 3
     max_workers: int = 2
     whisper_model: str = "base.en"

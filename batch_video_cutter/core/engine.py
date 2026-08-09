@@ -36,12 +36,18 @@ def cut_and_render_clip(
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     # Tự động phát hiện outcard.mp4 nếu chưa truyền
-    if outcard_path is None:
-        p_outcard = Path("e:/AI_Agent/outcard.mp4")
-        if not p_outcard.exists():
-            p_outcard = Path(__file__).parent.parent.parent / "outcard.mp4"
-        if p_outcard.exists():
-            outcard_path = p_outcard
+    if outcard_path is None or not Path(outcard_path).exists():
+        candidates = [
+            Path(r"E:\cap_video\outcard.mp4"),
+            Path(r"E:\output\outcard.mp4"),
+            Path(r"e:\AI_Agent\outcard.mp4"),
+            Path(__file__).parent.parent.parent / "outcard.mp4",
+            Path.cwd() / "outcard.mp4",
+        ]
+        for p in candidates:
+            if p.exists():
+                outcard_path = p.resolve()
+                break
 
     duration = end_time - start_time
     if duration <= 0:
@@ -132,6 +138,7 @@ def cut_and_render_clip(
 
         outcard_dur = 2.113
         outcard_start_s = max(0.0, duration - outcard_dur)
+        outcard_overlay_y = max(0, (style.get_output_resolution()[1] - 1080) // 2)
 
         # Video overlay outcard dùng colorkey=black:0.15:0.1 tách nền đen ra trong suốt 100%, giữ nguyên 100% màu sắc tự nhiên của video gốc
         outcard_v_scaled = "outcard_v_scaled"
@@ -139,7 +146,7 @@ def cut_and_render_clip(
         filter_complex += (
             f";[{outcard_input_idx}:v]scale=1080:1080:force_original_aspect_ratio=decrease,"
             f"pad=1080:1080:(1080-iw)/2:(1080-ih)/2:black,colorkey=black:0.15:0.1[{outcard_v_scaled}]"
-            f";[{last_v_label}][{outcard_v_scaled}]overlay=enable='gte(t,{outcard_start_s:.3f})'[{outcard_v_out}]"
+            f";[{last_v_label}][{outcard_v_scaled}]overlay=x=0:y={outcard_overlay_y}:enable='gte(t,{outcard_start_s:.3f})'[{outcard_v_out}]"
         )
         output_label = f"[{outcard_v_out}]"
 

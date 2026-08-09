@@ -55,6 +55,23 @@ class PipelineOrchestrator:
         self.bundle_dir = base_dir / folder_name
         self.bundle_dir.mkdir(parents=True, exist_ok=True)
 
+        # Tự động tìm kiếm file outcard.mp4
+        self.outcard_path = None
+        outcard_candidates = [
+            config.input_dir / "outcard.mp4",
+            config.input_dir.parent / "outcard.mp4",
+            Path(r"E:\cap_video\outcard.mp4"),
+            Path(r"E:\output\outcard.mp4"),
+            Path(r"e:\AI_Agent\outcard.mp4"),
+            Path(__file__).parent.parent / "outcard.mp4",
+            Path.cwd() / "outcard.mp4",
+        ]
+        for p in outcard_candidates:
+            if p.exists():
+                self.outcard_path = p.resolve()
+                logger.info(f"Đã phát hiện file Outcard: {self.outcard_path}")
+                break
+
 
         self.state_file = self.bundle_dir / "pipeline_state.json"
         self.completed_videos, self.saved_results_list = self._load_state()
@@ -205,20 +222,22 @@ class PipelineOrchestrator:
                         if not title_text_en or has_vi_chars(title_text_en):
                             clean_en_words = [w for w in re.sub(r"[^\w\s]", "", str(title_text_en)).split() if not has_vi_chars(w) and len(w) > 1]
                             if clean_en_words:
-                                title_text_en = clean_caption_text(" ".join(clean_en_words[:10]).upper() + " 💥")
+                                title_text_en = clean_caption_text(" ".join(clean_en_words[:10]).upper())
                             else:
-                                title_text_en = "HIGHLIGHT VIRAL SCENE 💥"
+                                title_text_en = clean_caption_text("HIGHLIGHT VIRAL SCENE")
 
                         if getattr(style, "get_caption_area", lambda: None)():
                             from batch_video_cutter.utils.graphic_subtitle import generate_top_caption_layer
                             top_cap_png = Path(tmp_dir) / f"top_caption_{clip_idx}.png"
                             canvas_res = style.get_output_resolution()
                             top_area_h = 180 if canvas_res[1] == 1080 else 280
+                            style_idx = getattr(style, "style_index", 4)
                             cap_png_path = generate_top_caption_layer(
                                 title_text_en,
                                 output_png=top_cap_png,
                                 canvas_size=canvas_res,
                                 top_area_height=top_area_h,
+                                style_index=style_idx,
                             )
                             if cap_png_path and cap_png_path.exists():
                                 clip_dur = seg.end_time - seg.start_time
@@ -237,6 +256,7 @@ class PipelineOrchestrator:
                                 subtitle_path=sub_path,
                                 timed_emojis=timed_emojis,
                                 title_text=title_text_en,
+                                outcard_path=self.outcard_path,
                             )
                         )
 
@@ -352,9 +372,9 @@ class PipelineOrchestrator:
             if not cleaned or has_vi_chars(cleaned):
                 clean_en_words = [w for w in re.sub(r"[^\w\s]", "", str(raw_title_en)).split() if not has_vi_chars(w) and len(w) > 1]
                 if clean_en_words:
-                    cleaned = clean_caption_text(" ".join(clean_en_words[:10]).upper() + " 💥")
+                    cleaned = clean_caption_text(" ".join(clean_en_words[:10]).upper())
                 else:
-                    cleaned = "HIGHLIGHT VIRAL SCENE 💥"
+                    cleaned = clean_caption_text("HIGHLIGHT VIRAL SCENE")
             
             clean_title_en = censor_sensitive_words(cleaned).lower()
             

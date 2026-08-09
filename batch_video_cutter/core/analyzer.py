@@ -528,7 +528,7 @@ def _generate_fallback_segments(
             clean_words = clean_words[:10]
         
         from ..utils.graphic_subtitle import clean_caption_text
-        title_text = clean_caption_text(" ".join(clean_words).upper() + " 💥")
+        title_text = clean_caption_text(" ".join(clean_words).upper())
         
         start_tc = f"{int(seg_start // 60):02d}:{int(seg_start % 60):02d}"
         end_tc = f"{int(seg_end // 60):02d}:{int(seg_end % 60):02d}"
@@ -855,7 +855,7 @@ def _extract_spoken_headline(
     if len(base_words) > 10:
         base_words = base_words[:10]
 
-    title = clean_caption_text(" ".join(base_words).upper() + " 💥")
+    title = clean_caption_text(" ".join(base_words).upper())
 
     # Kiểm tra chống trùng lặp với các tiêu đề đã xuất hiện trước đó
     if seen_titles and title.lower() in seen_titles:

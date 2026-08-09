@@ -7,17 +7,19 @@ from .style_1 import Style1
 from .style_2 import Style2
 from .style_3 import Style3
 from .style_4 import Style4
+from .style_5 import Style5
 
 STYLES_MAP: Dict[int, BaseStyle] = {
     1: Style1(),
     2: Style2(),
     3: Style3(),
     4: Style4(),
+    5: Style5(),
 }
 
 
 def get_style_by_index(index: int) -> BaseStyle:
-    """Returns the style instance for a given numeric index (1..4).
+    """Returns the style instance for a given numeric index (1..5).
 
     Falls back to Style1 if index is out of range.
     """
