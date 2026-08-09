@@ -26,6 +26,9 @@ class AppConfig:
     gemini_api_key: str = field(default_factory=lambda: os.getenv("GEMINI_API_KEY", ""))
     prompt_template_path: Optional[Path] = None
     session_folder_name: Optional[str] = None
+    use_gpu: bool = True
+    ffmpeg_preset: str = "superfast"
+    max_render_workers: int = 4
 
     def __post_init__(self):
         if not self.input_dir:
