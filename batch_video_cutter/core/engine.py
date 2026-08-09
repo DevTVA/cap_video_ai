@@ -16,6 +16,9 @@ from ..styles.base import BaseStyle
 from ..utils.helpers import get_video_resolution, format_timecode_hms
 
 
+from ..utils.ffmpeg_check import get_best_video_encoder
+
+
 def cut_and_render_clip(
     video_path: Path,
     start_time: float,
@@ -29,6 +32,9 @@ def cut_and_render_clip(
     audio_volume: float = 1.3,
     outcard_path: Optional[Path] = None,
     title_text: Optional[str] = None,
+    enable_gpu: bool = True,
+    cpu_preset: str = "superfast",
+    threads: int = 4,
 ) -> Path:
     """Cắt và render clip từ video gốc: tăng âm lượng 1.3x và đè outcard.mp4 ở cuối (âm thanh gốc xuống 0 trong phần outcard, chỉ phát âm thanh outcard)."""
     video_path = Path(video_path).resolve()
@@ -160,17 +166,18 @@ def cut_and_render_clip(
         # Tăng âm lượng video gốc lên 1.3x
         filter_complex += f";[0:a]volume={audio_volume:.2f}[a_final]"
 
+    encoder_name, codec_flags = get_best_video_encoder(enable_gpu=enable_gpu, cpu_preset=cpu_preset)
+
     cmd = [
         "ffmpeg",
         "-y",
+        "-threads", str(threads),
         *inputs,
         "-t", duration_hms,
         "-filter_complex", filter_complex,
         "-map", output_label,
         "-map", audio_label,
-        "-c:v", "libx264",
-        "-preset", "fast",
-        "-crf", "22",
+        *codec_flags,
         "-c:a", "aac",
         "-b:a", "192k",
         "-pix_fmt", "yuv420p",
@@ -178,8 +185,7 @@ def cut_and_render_clip(
         str(output_path),
     ]
 
-
-    logger.info(f"Bắt đầu render clip: {output_path.name} ({duration:.1f}s, {style.name})")
+    logger.info(f"Bắt đầu render clip: {output_path.name} ({duration:.1f}s, {style.name}, encoder={encoder_name})")
     logger.debug(f"FFmpeg command: {' '.join(cmd)}")
 
     try:
@@ -195,6 +201,27 @@ def cut_and_render_clip(
         _, stderr_output = process.communicate()
 
         if process.returncode != 0:
+            # Nếu dùng GPU mà lỗi → thử fallback 1 lần về software CPU (libx264)
+            if enable_gpu and encoder_name != "libx264":
+                logger.warning(f"FFmpeg GPU render thất bại ({encoder_name}), đang tự động thử lại bằng CPU libx264...")
+                return cut_and_render_clip(
+                    video_path=video_path,
+                    start_time=start_time,
+                    end_time=end_time,
+                    output_path=output_path,
+                    style=style,
+                    subtitle_path=subtitle_path,
+                    emoji_path=emoji_path,
+                    progress_callback=progress_callback,
+                    timed_emojis=timed_emojis,
+                    audio_volume=audio_volume,
+                    outcard_path=outcard_path,
+                    title_text=title_text,
+                    enable_gpu=False,
+                    cpu_preset=cpu_preset,
+                    threads=threads,
+                )
+
             logger.error(f"FFmpeg render lỗi (returncode {process.returncode}):\n{stderr_output}")
             raise RuntimeError(f"FFmpeg render thất bại cho file {output_path.name}")
 
