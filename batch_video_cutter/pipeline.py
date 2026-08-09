@@ -73,6 +73,7 @@ class PipelineOrchestrator:
                 break
 
 
+        self.render_semaphore = asyncio.Semaphore(config.max_render_workers)
         self.state_file = self.bundle_dir / "pipeline_state.json"
         self.completed_videos, self.saved_results_list = self._load_state()
         if self.saved_results_list:
@@ -182,98 +183,99 @@ class PipelineOrchestrator:
                     return
 
                 video_results = []
-                # 4. Render từng clip
-                for clip_idx, seg in enumerate(segments, 1):
-                    # Tên video chuẩn dạng giống Phong cách 1 & 2: 25.1.mp4, 25.2.mp4, 25.3.mp4
-                    clip_filename = f"{video_info.folder_name}.{clip_idx}.mp4"
-                    output_clip_path = self.bundle_dir / clip_filename
+                # 4. Render các clip song song
+                async def render_single_clip(clip_idx: int, seg: ViralSegment) -> dict:
+                    async with self.render_semaphore:
+                        clip_filename = f"{video_info.folder_name}.{clip_idx}.mp4"
+                        output_clip_path = self.bundle_dir / clip_filename
 
+                        with tempfile.TemporaryDirectory() as tmp_dir:
+                            sub_path = Path(tmp_dir) / f"sub_{clip_idx}.ass"
+                            sub_position = style.get_subtitle_position()
+                            clip_dur = seg.end_time - seg.start_time
+                            outcard_start_s = max(0.0, clip_dur - 2.113)
 
-                    with tempfile.TemporaryDirectory() as tmp_dir:
-                        sub_path = Path(tmp_dir) / f"sub_{clip_idx}.ass"
-                        sub_position = style.get_subtitle_position()
-                        clip_dur = seg.end_time - seg.start_time
-                        outcard_start_s = max(0.0, clip_dur - 2.113)
-
-                        # Tạo subtitles chuẩn theo style với độ phân giải canvas chuẩn xác
-                        sub_path, timed_emojis = await loop.run_in_executor(
-                            None,
-                            functools.partial(
-                                create_subtitles_from_transcript,
-                                segments=transcript.segments,
-                                clip_start=seg.start_time,
-                                clip_end=seg.end_time,
-                                output_path=sub_path,
-                                position=sub_position,
-                                font_name=getattr(style, "get_font_name", lambda: "Montserrat Black")(),
-                                font_size=getattr(style, "get_font_size", lambda: 66)(),
-                                highlight_color_name=getattr(style, "get_highlight_color", lambda: "yellow")(),
-                                italic=getattr(style, "get_italic_option", lambda: False)(),
-                                add_emojis=True,
-                                canvas_size=style.get_output_resolution(),
-                                outcard_start_s=outcard_start_s,
+                            # Tạo subtitles chuẩn theo style với độ phân giải canvas chuẩn xác
+                            sub_path, timed_emojis = await loop.run_in_executor(
+                                None,
+                                functools.partial(
+                                    create_subtitles_from_transcript,
+                                    segments=transcript.segments,
+                                    clip_start=seg.start_time,
+                                    clip_end=seg.end_time,
+                                    output_path=sub_path,
+                                    position=sub_position,
+                                    font_name=getattr(style, "get_font_name", lambda: "Montserrat Black")(),
+                                    font_size=getattr(style, "get_font_size", lambda: 66)(),
+                                    highlight_color_name=getattr(style, "get_highlight_color", lambda: "yellow")(),
+                                    italic=getattr(style, "get_italic_option", lambda: False)(),
+                                    add_emojis=True,
+                                    canvas_size=style.get_output_resolution(),
+                                    outcard_start_s=outcard_start_s,
+                                )
                             )
-                        )
 
-                        # Đảm bảo 100% video Top Caption Badge CHỈ sử dụng Tiếng Anh (title_en)
-                        from batch_video_cutter.utils.graphic_subtitle import clean_caption_text
-                        has_vi_chars = lambda s: any(c in str(s).lower() for c in "àáảãạăằắẳẵặâầấẩẫậèéẻẽẹêềếểễệìíỉĩịòóỏõọôồốổỗộơờớởỡợùúủũụưừứửữựỳýỷỹỵđ")
-                        title_text_en = clean_caption_text(seg.title_en)
-                        if not title_text_en or has_vi_chars(title_text_en):
-                            clean_en_words = [w for w in re.sub(r"[^\w\s]", "", str(title_text_en)).split() if not has_vi_chars(w) and len(w) > 1]
-                            if clean_en_words:
-                                title_text_en = clean_caption_text(" ".join(clean_en_words[:10]).upper())
-                            else:
-                                title_text_en = clean_caption_text("HIGHLIGHT VIRAL SCENE")
+                            # Đảm bảo 100% video Top Caption Badge CHỈ sử dụng Tiếng Anh (title_en)
+                            from batch_video_cutter.utils.graphic_subtitle import clean_caption_text
+                            has_vi_chars = lambda s: any(c in str(s).lower() for c in "àáảãạăằắẳẵặâầấẩẫậèéẻẽẹêềếểễệìíỉĩịòóỏõọôồốổỗộơờớởỡợùúủũụưừứửữựỳýỷỹỵđ")
+                            title_text_en = clean_caption_text(seg.title_en)
+                            if not title_text_en or has_vi_chars(title_text_en):
+                                clean_en_words = [w for w in re.sub(r"[^\w\s]", "", str(title_text_en)).split() if not has_vi_chars(w) and len(w) > 1]
+                                if clean_en_words:
+                                    title_text_en = clean_caption_text(" ".join(clean_en_words[:10]).upper())
+                                else:
+                                    title_text_en = clean_caption_text("HIGHLIGHT VIRAL SCENE")
 
-                        if getattr(style, "get_caption_area", lambda: None)():
-                            from batch_video_cutter.utils.graphic_subtitle import generate_top_caption_layer
-                            top_cap_png = Path(tmp_dir) / f"top_caption_{clip_idx}.png"
-                            canvas_res = style.get_output_resolution()
-                            top_area_h = 180 if canvas_res[1] == 1080 else 280
-                            style_idx = getattr(style, "style_index", 4)
-                            cap_png_path = generate_top_caption_layer(
-                                title_text_en,
-                                output_png=top_cap_png,
-                                canvas_size=canvas_res,
-                                top_area_height=top_area_h,
-                                style_index=style_idx,
+                            if getattr(style, "get_caption_area", lambda: None)():
+                                from batch_video_cutter.utils.graphic_subtitle import generate_top_caption_layer
+                                top_cap_png = Path(tmp_dir) / f"top_caption_{clip_idx}.png"
+                                canvas_res = style.get_output_resolution()
+                                top_area_h = 180 if canvas_res[1] == 1080 else 280
+                                style_idx = getattr(style, "style_index", 4)
+                                cap_png_path = generate_top_caption_layer(
+                                    title_text_en,
+                                    output_png=top_cap_png,
+                                    canvas_size=canvas_res,
+                                    top_area_height=top_area_h,
+                                    style_index=style_idx,
+                                )
+                                if cap_png_path and cap_png_path.exists():
+                                    clip_dur = seg.end_time - seg.start_time
+                                    timed_emojis = [(cap_png_path, 0.0, clip_dur)] + (timed_emojis or [])
+
+                            # Render clip bằng FFmpeg với Dynamic Timed HD Color Emoji PNG & Top Caption Badge PNG
+                            await loop.run_in_executor(
+                                None,
+                                functools.partial(
+                                    cut_and_render_clip,
+                                    video_path=video_info.path,
+                                    start_time=seg.start_time,
+                                    end_time=seg.end_time,
+                                    output_path=output_clip_path,
+                                    style=style,
+                                    subtitle_path=sub_path,
+                                    timed_emojis=timed_emojis,
+                                    title_text=title_text_en,
+                                    outcard_path=self.outcard_path,
+                                    enable_gpu=self.config.use_gpu,
+                                    cpu_preset=self.config.ffmpeg_preset,
+                                )
                             )
-                            if cap_png_path and cap_png_path.exists():
-                                clip_dur = seg.end_time - seg.start_time
-                                timed_emojis = [(cap_png_path, 0.0, clip_dur)] + (timed_emojis or [])
 
-                        # Render clip bằng FFmpeg với Dynamic Timed HD Color Emoji PNG & Top Caption Badge PNG
-                        await loop.run_in_executor(
-                            None,
-                            functools.partial(
-                                cut_and_render_clip,
-                                video_path=video_info.path,
-                                start_time=seg.start_time,
-                                end_time=seg.end_time,
-                                output_path=output_clip_path,
-                                style=style,
-                                subtitle_path=sub_path,
-                                timed_emojis=timed_emojis,
-                                title_text=title_text_en,
-                                outcard_path=self.outcard_path,
-                            )
-                        )
+                        return {
+                            "filename": clip_filename,
+                            "title_en": title_text_en,
+                            "title_vi": seg.title_vi or "",
+                            "title": title_text_en,
+                            "folder_name": video_info.folder_name,
+                            "start_time": seg.start_time,
+                            "end_time": seg.end_time,
+                            "reason": getattr(seg, "reason", ""),
+                        }
 
-
-                    # Lưu thông tin cho file tiêu đề
-                    item_info = {
-                        "filename": clip_filename,
-                        "title_en": title_text_en,
-                        "title_vi": seg.title_vi or "",
-                        "title": title_text_en,
-                        "folder_name": video_info.folder_name,
-                        "start_time": seg.start_time,
-                        "end_time": seg.end_time,
-                        "reason": getattr(seg, "reason", ""),
-                    }
-                    video_results.append(item_info)
-                    results_list.append(item_info)
+                clip_tasks = [render_single_clip(clip_idx, seg) for clip_idx, seg in enumerate(segments, 1)]
+                video_results = list(await asyncio.gather(*clip_tasks))
+                results_list.extend(video_results)
 
                 self._save_state(str_path, video_results)
                 logger.info(f"Hoàn tất video: {video_info.path.name}")
