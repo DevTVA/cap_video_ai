@@ -69,6 +69,23 @@ console = Console()
     default=None,
     help="Tên thư mục đóng gói thành phẩm (mặc định tự tạo theo timestamp: batch_export_YYYYMMDD_HHMMSS).",
 )
+@click.option(
+    "--gpu/--no-gpu",
+    default=True,
+    help="Bật/tắt tăng tốc phần cứng GPU (NVIDIA NVENC / Intel QSV / AMD AMF) cho FFmpeg (mặc định: --gpu).",
+)
+@click.option(
+    "--preset",
+    default="superfast",
+    type=click.Choice(["ultrafast", "superfast", "veryfast", "faster", "fast", "medium"]),
+    help="FFmpeg CPU encoding preset nếu không có GPU (mặc định: superfast).",
+)
+@click.option(
+    "--render-workers",
+    default=4,
+    type=int,
+    help="Số lượng luồng render clip đồng thời (mặc định: 4).",
+)
 def main_cli(
     input_dir: Path,
     output_dir: Path,
@@ -79,6 +96,9 @@ def main_cli(
     api_key: str,
     prompt_file: Path,
     folder_name: str,
+    gpu: bool,
+    preset: str,
+    render_workers: int,
 ):
     """Entry point cho CLI."""
     console.print(
@@ -107,6 +127,9 @@ def main_cli(
         gemini_api_key=gemini_key,
         prompt_template_path=prompt_file,
         session_folder_name=folder_name,
+        use_gpu=gpu,
+        ffmpeg_preset=preset,
+        max_render_workers=render_workers,
     )
 
 
