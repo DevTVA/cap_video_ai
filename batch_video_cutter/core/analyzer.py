@@ -126,7 +126,7 @@ TASKS:
 
 SEGMENT SELECTION & DIALOGUE RULES:
 - STRICT DIALOGUE MANDATE: You MUST ONLY select segments that contain ACTIVE BACK-AND-FORTH DIALOGUE, INTERROGATION, ARGUMENT, OR DIRECT Q&A BETWEEN 2 OR MORE PEOPLE (e.g. Attorney & Witness, Judge & Defendant, Officer & Suspect, Host & Guest).
-- STRICTLY FORBID INTROS & MONOLOGUES: DO NOT select channel introductions, narrator summaries, voiceover background explanations, single-speaker intros, or host presentations. Reject any segment where only 1 person is giving an intro!
+- STRICTLY FORBID SHOW INTROS, MONOLOGUES & BREAKS: DO NOT select channel introductions, show intros ("welcome to the show", "today's episode", "brought to you by"), station breaks, narrator summaries, voiceover background explanations, single-speaker intros, or host presentations AT ANY TIMESTAMP IN THE VIDEO. Reject any segment where 1 person is giving an intro or welcoming the audience!
 - NON-OVERLAPPING MANDATE: All selected clips MUST be completely distinct with NO time overlap between clips. Clip 2 must start AFTER Clip 1 ends!
 
 CONTENT & STYLE RULES:
@@ -167,6 +167,66 @@ def score_dialogue_quality(text: str) -> float:
     score = 1.0
     text_lower = text.lower()
 
+INTRO_KEYWORDS = [
+    # General channel & video intros
+    "welcome back", "subscribe", "today we're", "today we are", "in this video",
+    "thanks for watching", "don't forget to like", "channel", "my name is",
+    "let's talk about", "let's dive into", "hey guys", "hello everyone",
+    # Show intros, station IDs, podcast & sponsor monologues
+    "welcome to", "brought to you by", "sponsored by", "today's episode",
+    "today's show", "host", "station break", "stay tuned", "commercial break",
+    "welcome to the show", "welcome to our channel", "in today's show", "before we start",
+    "make sure to", "hit that button", "leave a comment", "welcome back to", "this episode is",
+    "on today's show", "in this episode", "welcome everyone", "welcome all", "on the show", "today on the show",
+    # Vietnamese keywords
+    "chào mừng", "đăng ký kênh", "tập hôm nay", "xin chào các bạn", "chủ đề hôm nay",
+    "cảm ơn đã xem", "đăng ký ngay", "chương trình hôm nay", "chào mừng quay trở lại",
+    "xin chào tất cả", "chào mừng các bạn", "kênh của chúng tôi",
+]
+
+
+def is_intro_or_monologue_line(text: str) -> bool:
+    """Kiểm tra xem thoại có chứa từ khóa giới thiệu show / host monologue hay không."""
+    if not text:
+        return False
+    t_lower = text.lower()
+    for ik in INTRO_KEYWORDS:
+        if ik in t_lower:
+            return True
+    return False
+
+
+def _extract_spoken_text_in_range(
+    transcript_text: str,
+    start_time: float,
+    end_time: float,
+) -> str:
+    """Trích xuất chuỗi văn bản thoại trong khoảng thời gian [start_time, end_time]."""
+    if not transcript_text:
+        return ""
+    lines_in_range = []
+    for line in transcript_text.splitlines():
+        line_str = line.strip()
+        if not line_str:
+            continue
+        ts_match = re.search(r"\[(\d{1,2}:\d{2}(?::\d{2})?)\]", line_str)
+        if ts_match:
+            t_sec = _parse_timecode_to_seconds(ts_match.group(1))
+            if start_time <= t_sec <= end_time:
+                text_part = re.sub(r"\[.*?\]", "", line_str).strip()
+                if text_part:
+                    lines_in_range.append(text_part)
+    return " ".join(lines_in_range)
+
+
+def score_dialogue_quality(text: str) -> float:
+    """Đánh giá chất lượng thoại (hội thoại đối đáp vs thuyết minh 1 người)."""
+    if not text:
+        return 0.0
+
+    score = 5.0
+    text_lower = text.lower()
+
     # 1. Thưởng điểm cho từ khóa đối đáp kịch tính
     for pat in DIALOGUE_KEYWORDS:
         matches = len(re.findall(pat, text_lower))
@@ -176,15 +236,9 @@ def score_dialogue_quality(text: str) -> float:
     q_count = text.count("?")
     score += q_count * 2.0
 
-    # 3. Phạt điểm nặng nếu dính từ khóa giới thiệu kênh / thuyết minh 1 người (Intro / Monologue)
-    intro_keywords = [
-        "welcome back", "subscribe", "today we're", "today we are", "in this video",
-        "thanks for watching", "don't forget to like", "channel", "my name is",
-        "let's talk about", "let's dive into", "hey guys", "hello everyone"
-    ]
-    for ik in intro_keywords:
-        if ik in text_lower:
-            score -= 5.0
+    # 3. Phạt điểm nặng nếu dính từ khóa giới thiệu kênh / show intro / monologue
+    if is_intro_or_monologue_line(text_lower):
+        score -= 10.0
 
     return max(0.0, score)
 
@@ -911,11 +965,11 @@ def _convert_raw_segments(
             )
             continue
 
-        # 2. Ép giới hạn Bỏ 25s cuối cho outro
+        # 2. Ép giới hạn Bỏ outro_offset cuối cho outro
         if outro_offset > 0.0 and video_duration > 0.0:
             max_allowed_end = max(intro_offset + 25.0, video_duration - outro_offset)
             if end_time > max_allowed_end:
-                logger.info(f"Segment {i+1}: end_time={end_time:.1f}s thuộc 25s cuối outro, điều chỉnh về {max_allowed_end:.1f}s")
+                logger.info(f"Segment {i+1}: end_time={end_time:.1f}s thuộc {outro_offset:.1f}s cuối outro, điều chỉnh về {max_allowed_end:.1f}s")
                 end_time = max_allowed_end
                 start_time = max(intro_offset, end_time - 27.0)
 
@@ -954,6 +1008,16 @@ def _convert_raw_segments(
 
         if is_overlapping:
             continue
+
+        # 3.5 KIỂM TRA CHỐNG DÍNH GIỚI THIỆU SHOW (Show Intro & Monologue Check):
+        if transcript_text:
+            spoken_text = _extract_spoken_text_in_range(transcript_text, start_time, start_time + 10.0)
+            if is_intro_or_monologue_line(spoken_text):
+                logger.warning(
+                    f"Segment {i+1} [{start_time:.1f}s -> {end_time:.1f}s]: Mở đầu thoại '{spoken_text[:60]}...' "
+                    f"dính từ khóa giới thiệu show/MC monologue, BỎ QUA HOÀN TOÀN!"
+                )
+                continue
 
         raw_title_en = str(raw.get("title_en", raw.get("title", "Untitled"))).strip()
         raw_title_vi = str(raw.get("title_vi", "")).strip()
@@ -1050,6 +1114,11 @@ def _convert_raw_segments(
         for fill_i in range(len(segments), max_clips):
             st = valid_start + step * (fill_i + 1)
             et = min(valid_end, st + 27.0)
+            if transcript_text:
+                spoken = _extract_spoken_text_in_range(transcript_text, st, st + 10.0)
+                if is_intro_or_monologue_line(spoken):
+                    st = min(valid_end - 27.0, st + 20.0)
+                    et = min(valid_end, st + 27.0)
             if et - st < 25.0:
                 st = max(valid_start, et - 27.0)
 

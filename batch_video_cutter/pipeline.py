@@ -152,11 +152,11 @@ class PipelineOrchestrator:
                 style = resolve_style_for_folder(video_info.folder_index, self.style_mapping)
                 logger.info(f"Sử dụng {style.name} cho folder [{video_info.folder_name}]")
 
-                # Áp dụng cho TẤT CẢ Phong cách (Style 1, 2, 3, 4): Bỏ 35s đầu (intro dẫn chuyện/kênh) và 25s cuối (outro) để tránh tuyệt đối dính intro video gốc
-                intro_offset = 35.0
-                outro_offset = 25.0
+                # Cấu hình mốc Intro/Outro riêng theo từng Phong cách (Style 1 & 2: bỏ 3s đầu, 30s cuối; Style 3, 4, 5: bỏ 35s đầu, 25s cuối)
+                intro_offset = style.get_intro_offset()
+                outro_offset = style.get_outro_offset()
                 max_valid_end = max(0.0, transcript.duration - outro_offset)
-                logger.info(f"Giới hạn khoảng cắt cho {style.name}: Bỏ {intro_offset:.1f}s đầu (giới thiệu/kênh) và {outro_offset:.1f}s cuối (Chỉ cắt từ {intro_offset:.1f}s đến {max_valid_end:.1f}s)")
+                logger.info(f"Giới hạn khoảng cắt cho {style.name}: Bỏ {intro_offset:.1f}s đầu và {outro_offset:.1f}s cuối (Chỉ cắt từ {intro_offset:.1f}s đến {max_valid_end:.1f}s)")
 
                 # Xác định số lượng clip tối đa theo style (Style 3 & Style 4 cắt 4 đoạn viral)
                 style_max_clips = getattr(style, "get_max_clips", lambda: None)()

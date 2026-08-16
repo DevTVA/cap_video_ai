@@ -113,6 +113,14 @@ class BaseStyle(ABC):
         """Số lượng clip viral tối đa cần cắt cho style này (None: mặc định từ config)."""
         return None
 
+    def get_intro_offset(self) -> float:
+        """Số giây đầu cần bỏ qua (intro video gốc)."""
+        return 35.0
+
+    def get_outro_offset(self) -> float:
+        """Số giây cuối cần bỏ qua (outro/outcard video gốc)."""
+        return 25.0
+
 
     def format_ass_filter(self, subtitle_path: str) -> str:
         """Tạo chuỗi filter ass='path':fontsdir='fonts_dir' cho FFmpeg."""

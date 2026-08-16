@@ -318,11 +318,15 @@ def format_transcript_for_llm(
     """
     lines: List[str] = []
     max_end = max(0.0, result.duration - outro_offset) if (outro_offset > 0.0 and result.duration > outro_offset) else float("inf")
+    from .analyzer import is_intro_or_monologue_line
     for seg in result.segments:
         if seg.start >= intro_offset and (outro_offset == 0.0 or seg.end <= max_end):
             minutes = int(seg.start) // 60
             seconds = int(seg.start) % 60
-            lines.append(f"[{minutes:02d}:{seconds:02d}] {seg.text}")
+            seg_text = seg.text
+            if is_intro_or_monologue_line(seg_text):
+                seg_text = f"{seg_text} [SHOW INTRO - DO NOT SELECT]"
+            lines.append(f"[{minutes:02d}:{seconds:02d}] {seg_text}")
 
     # Nếu bộ lọc làm rỗng transcript (do video quá ngắn), fallback chấp nhận đoạn ngắn sau mốc intro_offset
     if not lines:

@@ -63,3 +63,11 @@ class Style1(BaseStyle):
 
     def get_subtitle_position(self) -> str:
         return "bottom"
+
+    def get_intro_offset(self) -> float:
+        """Phong cách 1: Cắt 3 giây đầu."""
+        return 3.0
+
+    def get_outro_offset(self) -> float:
+        """Phong cách 1: Cắt 30 giây cuối để tránh cắt vào outcard video gốc."""
+        return 30.0

@@ -608,8 +608,8 @@ class EmojiTracker:
     def clear(self):
         self.history.clear()
 
+EMOJI_AND_FORMAT_PATTERN = re.compile(r"[\U00010000-\U0010FFFF\u2600-\u27BF\u2300-\u23FF\u2B00-\u2BFF\uFE00-\uFE0F\u200B\u200C\u200D\u200E\u200F\u202E\u2060\u2061\u2062\u2063\u20E3\uFEFF]+", flags=re.UNICODE)
 
-# Global tracker instance cho toàn ứng dụng
 GLOBAL_EMOJI_TRACKER = EmojiTracker(max_history=15)
 
 EMOJIS_KEYWORD_MAP = [
@@ -662,16 +662,10 @@ def ensure_caption_has_emoji(text: str, tracker: Optional[EmojiTracker] = None) 
     if tracker is None:
         tracker = GLOBAL_EMOJI_TRACKER
 
-    emoji_pattern = re.compile(
-        r"[\U00010000-\U0010FFFF\u2600-\u27BF\u2300-\u23FF\u2B00-\u2BFF\uFE00-\uFE0F]+",
-        flags=re.UNICODE,
-    )
-
-    found_emojis = emoji_pattern.findall(text)
-    text_clean = emoji_pattern.sub("", text)
+    found_emojis = EMOJI_AND_FORMAT_PATTERN.findall(text)
+    text_clean = EMOJI_AND_FORMAT_PATTERN.sub("", text)
     text_clean = re.sub(r"\s+", " ", text_clean).strip()
 
-    # Kiểm tra nếu emoji tìm thấy không phải đơn thuần là fallback dummy (💥) và chưa bị lặp lại gần đây
     non_dummy_emojis = [e for e in found_emojis if e != "💥" and not tracker.is_recently_used(e)]
 
     if non_dummy_emojis:
@@ -679,14 +673,12 @@ def ensure_caption_has_emoji(text: str, tracker: Optional[EmojiTracker] = None) 
         tracker.add(chosen_emoji)
         return f"{text_clean} {chosen_emoji}".strip() if text_clean else chosen_emoji
 
-    # Nếu không có emoji hoặc chỉ có dummy 💥 / emoji lặp lại -> Chọn emoji mới từ Pool theo chủ đề
     t_lower = text_clean.lower()
     for pattern, emoji_list in EMOJIS_KEYWORD_MAP:
         if re.search(pattern, t_lower):
             chosen = tracker.select_emoji(emoji_list)
             return f"{text_clean} {chosen}".strip() if text_clean else chosen
 
-    # Fallback từ bộ GLOBAL_FALLBACK_EMOJIS
     chosen_fallback = tracker.select_emoji(GLOBAL_FALLBACK_EMOJIS)
     return f"{text_clean} {chosen_fallback}".strip() if text_clean else chosen_fallback
 
@@ -696,35 +688,25 @@ def clean_caption_text(text: str) -> str:
     if not text:
         return ""
 
-    # 1. Tách emoji ra khỏi text và BÓC TÁCH EMOJI KHỎI TEXT BODY trước khi làm sạch
-    emoji_pattern = re.compile(
-        r"[\U00010000-\U0010FFFF\u2600-\u27BF\u2300-\u23FF\u2B00-\u2BFF\uFE00-\uFE0F]+",
-        flags=re.UNICODE,
-    )
-    emoji_matches = emoji_pattern.findall(text)
+    emoji_matches = EMOJI_AND_FORMAT_PATTERN.findall(text)
     existing_emoji = " ".join(emoji_matches) if emoji_matches else ""
-    text_no_emoji = emoji_pattern.sub("", text).strip()
+    text_no_emoji = EMOJI_AND_FORMAT_PATTERN.sub("", text).strip()
 
-    # 2. Bỏ dấu nháy thừa và markdown bold/italic (**text**, *text*, __text__)
     text = text_no_emoji.replace("**", "").replace("*", "").replace("__", "").replace("`", "")
     text = text.replace("’", "'").replace("‘", "'").replace("”", '"').replace("“", '"').replace("—", "-")
     text = text.strip('"\' ')
 
-    # 3. Loại bỏ tiền tố nhãn rác của LLM
     text = re.sub(r"^\s*(?:English|Vietnamese)\s+(?:Title|Caption|Headline)\s*[\:\-]?\s*", "", text, flags=re.IGNORECASE)
     text = re.sub(r"^\s*(?:Title|Caption|Headline)\s*(?:En|Vi)?\s*[\:\-]\s*", "", text, flags=re.IGNORECASE)
     text = re.sub(r"^\s*(?:English|Vietnamese)\s*[\:\-]\s*", "", text, flags=re.IGNORECASE)
     text = re.sub(r"^\s*\d+[\.\:]\s*", "", text)
 
-    # 4. Loại bỏ các chú thích số từ trong ngoặc đơn/ngoặc vuông từ LLM
     text = re.sub(r"\s*[\(\[\{]\s*(?:~?\s*\d+\s*words?|word\s*count.*?)[\)\]\}]", "", text, flags=re.IGNORECASE)
     text = re.sub(r"\s*[\(\[\{]\s*\d+\s*TỪ\s*[\)\]\}]", "", text, flags=re.IGNORECASE)
     text = text.strip('"\' ')
 
-    # 5. Loại bỏ từ rác rủi ro cũ bị nối đuôi ở cuối chuỗi (sau khi đã tách sạch emoji)
     text = re.sub(r"(?:\s+\b(?:EXPOSED|REVEALED|TRUTH|UNCOVERED|NOW)\b)+\s*$", "", text, flags=re.IGNORECASE).strip()
 
-    # 6. Làm sạch chữ, censor từ nhạy cảm và ghép lại emoji chuẩn
     clean = re.sub(r"\s+", " ", text).strip().upper()
     clean = censor_sensitive_words(clean)
 
@@ -735,40 +717,31 @@ def clean_caption_text(text: str) -> str:
 
 
 def clean_caption_text_for_frame(text: str) -> str:
-    """Làm sạch rác LLM và LOẠI BỎ 100% Emojis cho khung hình video (Top Caption PNG layer trong video không chứa emoji)."""
+    """Làm sạch rác LLM và LOẠI BỎ 100% Emojis & ký tự điều khiển ẩn cho khung hình video (Top Caption PNG layer trong video)."""
     if not text:
         return ""
 
-    # 1. Loại bỏ Emojis
-    emoji_pattern = re.compile(
-        r"[\U00010000-\U0010FFFF\u2600-\u27BF\u2300-\u23FF\u2B00-\u2BFF\uFE00-\uFE0F]+",
-        flags=re.UNICODE,
-    )
-    text = emoji_pattern.sub("", text).strip()
+    text = EMOJI_AND_FORMAT_PATTERN.sub("", text)
+    text = re.sub(r"[\x00-\x1F\x7F-\x9F\u200B\u200C\u200D\u200E\u200F\u202E\u2060\u2061\u2062\u2063\u20E3\uFEFF]", "", text).strip()
 
-    # 2. Bỏ dấu nháy thừa và markdown bold/italic
     text = text.replace("**", "").replace("*", "").replace("__", "").replace("`", "")
     text = text.replace("’", "'").replace("‘", "'").replace("”", '"').replace("“", '"').replace("—", "-")
     text = text.strip('"\' ')
 
-    # 3. Loại bỏ tiền tố nhãn rác của LLM
     text = re.sub(r"^\s*(?:English|Vietnamese)\s+(?:Title|Caption|Headline)\s*[\:\-]?\s*", "", text, flags=re.IGNORECASE)
     text = re.sub(r"^\s*(?:Title|Caption|Headline)\s*(?:En|Vi)?\s*[\:\-]\s*", "", text, flags=re.IGNORECASE)
     text = re.sub(r"^\s*(?:English|Vietnamese)\s*[\:\-]\s*", "", text, flags=re.IGNORECASE)
     text = re.sub(r"^\s*\d+[\.\:]\s*", "", text)
 
-    # 4. Loại bỏ chú thích số từ trong ngoặc từ LLM
     text = re.sub(r"\s*[\(\[\{]\s*(?:~?\s*\d+\s*words?|word\s*count.*?)[\)\]\}]", "", text, flags=re.IGNORECASE)
     text = re.sub(r"\s*[\(\[\{]\s*\d+\s*TỪ\s*[\)\]\}]", "", text, flags=re.IGNORECASE)
     text = text.strip('"\' ')
 
-    # 5. Loại bỏ từ rác rủi ro cũ bị nối đuôi ở cuối chuỗi
     text = re.sub(r"(?:\s+\b(?:EXPOSED|REVEALED|TRUTH|UNCOVERED|NOW)\b)+\s*$", "", text, flags=re.IGNORECASE).strip()
 
-    # 6. Chuẩn hóa chữ in hoa và censor từ nhạy cảm
     clean = re.sub(r"\s+", " ", text).strip().upper()
+    clean = re.sub(r"[\u200B\u200C\u200D\uFEFF]", "", clean)
     return censor_sensitive_words(clean)
-
 
 def ensure_caption_8_to_10_words(
     title_text: str,

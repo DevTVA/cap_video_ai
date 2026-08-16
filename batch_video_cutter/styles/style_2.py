@@ -69,3 +69,11 @@ class Style2(BaseStyle):
         """Kích thước font chữ cho Style 2 (66pt bằng tỉ lệ cỡ chữ Outcard)."""
         return 66
 
+    def get_intro_offset(self) -> float:
+        """Phong cách 2: Cắt 3 giây đầu."""
+        return 3.0
+
+    def get_outro_offset(self) -> float:
+        """Phong cách 2: Cắt 30 giây cuối để tránh cắt vào outcard video gốc."""
+        return 30.0
+

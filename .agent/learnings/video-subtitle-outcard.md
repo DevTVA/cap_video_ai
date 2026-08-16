@@ -36,6 +36,14 @@
 - **Chi tiết**: Gộp toàn bộ quá trình cắt clip, zoom video 150% (không mất cằm/đầu), nạp lớp phụ đề đồ họa, tăng âm 1.3x và hòa trộn `outcard.mp4` vào một câu lệnh FFmpeg duy nhất. Đóng gói clip thành phẩm vào thư mục phiên làm việc `final_clips/batch_export_YYYYMMDD_HHMMSS/` với tên clip chuẩn dạng `{folder_name}.{clip_idx}.mp4` (Ví dụ: `25.1.mp4`, `25.2.mp4`) giống 100% Phong cách 1 & 2.
 - **Files liên quan**: `batch_video_cutter/core/engine.py`, `batch_video_cutter/pipeline.py`
 
+### Bộ Lọc Hybrid 2 Lớp Chống Dính Giới Thiệu Show & MC Monologue (Style 3, 4, 5)
+- **Ngày**: 2026-08-12
+- **Chi tiết**: Kết hợp 2 lớp lọc loại bỏ triệt để các phân đoạn thoại dẫn nhập show, chào mừng MC, station break hoặc sponsor monologue:
+  1. Lớp Local Pre-Filter: Mở rộng `INTRO_KEYWORDS`, phạt điểm `score_dialogue_quality()` (-10.0), tự động gắn nhãn `[SHOW INTRO - DO NOT SELECT]` vào transcript text và lọc bỏ các segment candidate có 10s thoại mở đầu dính intro line.
+  2. Lớp LLM Prompt Requirement: Ép cứng điều kiện cấm ngắt các mốc timecode chứa lời chào/dẫn show trong `scipt.txt` và `DEFAULT_PROMPT_TEMPLATE`.
+  3. Quản lý Mốc Intro/Outro Theo Style: Style 1 & 2 bỏ 3s đầu, 30s cuối; Style 3, 4, 5 bỏ 35s đầu, 25s cuối.
+- **Files liên quan**: `batch_video_cutter/core/analyzer.py`, `batch_video_cutter/core/transcriber.py`, `scipt.txt`, `batch_video_cutter/styles/style_1.py`, `batch_video_cutter/styles/style_2.py`
+
 ---
 
 ## Bugs & Solutions
