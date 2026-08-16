@@ -10,7 +10,7 @@
 ### Phân Cụm Phụ Đề Theo Nhịp Nói (Punctuation & Pause Detection)
 - **Ngày**: 2026-07-30
 - **Chi tiết**: Thay vì cắt cụm từ cố định (hardcoded 3-4 words), engine nhóm các từ thoại dựa trên dấu câu (`,`, `.`, `!`, `?`, `;`, `:`) và khoảng lặng tự nhiên giữa 2 từ thoại liên tiếp (`next_start - current_end > 0.22s`). Điều này giúp phụ đề tự nhiên, khớp hoàn toàn với nhịp hít thở và ngắt vế câu của thoại.
-- **Files liên quan**: `batch_video_cutter/`
+- **Files liên quan**: `batch_video_cutter/core/analyzer.py`, `batch_video_cutter/utils/subtitle.py`
 
 ### Single Overlay Concat Manifest for PNG Subtitles
 - **Ngày**: 2026-08-16
@@ -46,7 +46,7 @@
   2. Nhóm từ vào một cụm (chunk) mới khi gặp dấu câu ngắt câu/vế hoặc khi phát hiện khoảng nghỉ giữa 2 từ `> 0.22s`.
   3. Đặt thời gian hiển thị khung phụ đề cố định từ `chunk_start` đến `chunk_end`.
   4. Hiệu ứng Karaoke: Highlight từ tương ứng với mốc thời gian playback hiện tại mà không làm thay đổi vị trí toàn cụm.
-- **Files liên quan**: `batch_video_cutter/`
+- **Files liên quan**: `batch_video_cutter/utils/subtitle.py`, `batch_video_cutter/utils/graphic_subtitle.py`
 
 ---
 
