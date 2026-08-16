@@ -67,9 +67,12 @@ def cut_and_render_clip(
     else:
         in_w, in_h = res
 
-    # Lấy filter complex từ style (có nạp title_text nếu phong cách yêu cầu Top Caption)
-    sub_str = str(subtitle_path.resolve()) if subtitle_path and subtitle_path.exists() else None
-    
+    # Ưu tiên hoàn toàn luồng ảnh PNG (nếu có), cấm nạp file ASS cũ để tránh đè lớp kép
+    if timed_emojis:
+        sub_str = None
+    else:
+        sub_str = str(subtitle_path.resolve()) if subtitle_path and subtitle_path.exists() else None
+
     # Kiểm tra xem get_ffmpeg_filter của style có nhận title_text không
     import inspect
     sig = inspect.signature(style.get_ffmpeg_filter)
@@ -91,19 +94,56 @@ def cut_and_render_clip(
     outcard_dur = 2.113
     outcard_start_s = max(0.0, duration - outcard_dur) if (outcard_path and Path(outcard_path).exists()) else None
 
-    # Render Graphic Subtitle PNG Layer (Text + Color Emoji màu) hoặc Emoji PNG đơn lẻ
+    # Render Graphic Subtitle PNG Layer (Text + Color Emoji màu) qua Concat Manifest hoặc Emoji PNG đơn lẻ
     if timed_emojis:
-        last_label = output_label.strip("[]")
-        for idx, item in enumerate(timed_emojis):
-            png_path = item[0]
-            start_s = item[1]
-            end_s = item[2]
-            png_p = Path(png_path).resolve()
-            if not png_p.exists():
-                continue
+        from ..utils.graphic_subtitle import generate_concat_manifest
 
-            is_top_caption = "top_caption" in png_p.name
-            if outcard_start_s is not None and not is_top_caption:
+        last_label = output_label.strip("[]")
+        
+        # Bước 2: Chuẩn hóa fps=30 cố định cho luồng video chính ngay trước khi overlay
+        filter_complex += f";[{last_label}]fps=30[v_fps_norm]"
+        last_label = "v_fps_norm"
+
+        karaoke_items = []
+        other_items = []
+
+        for item in timed_emojis:
+            if not item or not Path(item[0]).exists():
+                continue
+            png_name = Path(item[0]).name
+            if len(item) == 3 and "top_caption" not in png_name:
+                karaoke_items.append(item)
+            else:
+                other_items.append(item)
+
+        # Bước 1: Dùng concat demuxer cho toàn bộ PNG Karaoke để chỉ overlay 1 lần duy nhất
+        if karaoke_items:
+            tmp_sub_dir = Path(karaoke_items[0][0]).parent
+            manifest_path = generate_concat_manifest(
+                graphic_results=karaoke_items,
+                tmp_dir=tmp_sub_dir,
+                canvas_size=style.get_output_resolution(),
+                outcard_start_s=outcard_start_s,
+                clip_duration=duration,
+            )
+
+            inputs.extend(["-f", "concat", "-safe", "0", "-i", str(manifest_path.resolve())])
+            concat_input_idx = current_input_idx
+            current_input_idx += 1
+
+            out_label = f"v_out_concat"
+            filter_complex += (
+                f";[{concat_input_idx}:v]format=yuva420p[subs_stream]"
+                f";[{last_label}][subs_stream]overlay=0:0:eof_action=pass[{out_label}]"
+            )
+            last_label = out_label
+
+        # Overlay các item khác (Top Caption PNG hoặc Emoji lẻ nếu có)
+        for item in other_items:
+            png_p = Path(item[0]).resolve()
+            start_s, end_s = item[1], item[2]
+
+            if outcard_start_s is not None and "top_caption" not in png_p.name:
                 if start_s >= outcard_start_s:
                     continue
                 end_s = min(end_s, outcard_start_s)
@@ -112,14 +152,12 @@ def cut_and_render_clip(
             out_label = f"v_out_{current_input_idx}"
 
             if len(item) == 3:
-                # Graphic Subtitle Layer PNG 1080x1080 chứa Chữ + Highlight + HD Color Emoji
                 filter_complex += (
                     f";[{last_label}][{current_input_idx}:v]overlay="
                     f"0:0:enable='between(t,{start_s:.3f},{end_s:.3f})'[{out_label}]"
                 )
             else:
-                x_pos = item[3]
-                y_pos = item[4]
+                x_pos, y_pos = item[3], item[4]
                 scaled_label = f"e_img_{current_input_idx}"
                 filter_complex += (
                     f";[{current_input_idx}:v]scale=65:65[{scaled_label}]"
@@ -130,6 +168,7 @@ def cut_and_render_clip(
 
             last_label = out_label
             current_input_idx += 1
+
         output_label = f"[{last_label}]"
 
     # Xử lý Outcard & Audio (Tăng âm lượng 1.3x, đè outcard ở cuối và tắt âm thoại khi outcard chạy)

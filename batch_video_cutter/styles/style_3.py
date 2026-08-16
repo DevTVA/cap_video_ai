@@ -82,8 +82,8 @@ class Style3(BaseStyle):
         return "bottom"
 
     def get_highlight_color(self) -> str:
-        """Màu Highlight MÀU ĐỎ ("red") chuẩn 100% theo mẫu phong cách 3.mp4."""
-        return "red"
+        """Màu Highlight MÀU XANH LÁ ("green")."""
+        return "green"
 
     def get_font_size(self) -> int:
         """Cỡ font 66pt bằng tỉ lệ cỡ chữ Outcard."""

@@ -102,8 +102,8 @@ class BaseStyle(ABC):
 
 
     def get_highlight_color(self) -> str:
-        """Màu Highlight từ active ("green", "red", "yellow")."""
-        return "yellow"
+        """Màu Highlight từ active ("green")."""
+        return "green"
 
     def get_italic_option(self) -> bool:
         """Có nghiêng chữ (Italic Slant) hay không."""

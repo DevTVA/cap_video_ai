@@ -29,6 +29,7 @@ class AppConfig:
     use_gpu: bool = True
     ffmpeg_preset: str = "superfast"
     max_render_workers: int = 4
+    force_rerender: bool = False
 
     def __post_init__(self):
         if not self.input_dir:

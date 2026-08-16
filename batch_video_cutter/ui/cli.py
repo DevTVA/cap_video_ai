@@ -86,6 +86,13 @@ console = Console()
     type=int,
     help="Số lượng luồng render clip đồng thời (mặc định: 4).",
 )
+@click.option(
+    "--force",
+    "-force",
+    is_flag=True,
+    default=False,
+    help="Ép buộc render lại tất cả các clip, bỏ qua cache state cũ.",
+)
 def main_cli(
     input_dir: Path,
     output_dir: Path,
@@ -99,6 +106,7 @@ def main_cli(
     gpu: bool,
     preset: str,
     render_workers: int,
+    force: bool,
 ):
     """Entry point cho CLI."""
     console.print(
@@ -130,6 +138,7 @@ def main_cli(
         use_gpu=gpu,
         ffmpeg_preset=preset,
         max_render_workers=render_workers,
+        force_rerender=force,
     )
 
 

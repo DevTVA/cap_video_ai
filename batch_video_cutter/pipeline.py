@@ -124,7 +124,7 @@ class PipelineOrchestrator:
         async with semaphore:
             str_path = str(video_info.path)
             first_clip_path = self.bundle_dir / f"{video_info.folder_name}.1.mp4"
-            if str_path in self.completed_videos and first_clip_path.exists():
+            if not getattr(self.config, "force_rerender", False) and str_path in self.completed_videos and first_clip_path.exists():
                 logger.info(f"Đã xử lý trước đó và file clip tồn tại, bỏ qua: {video_info.path.name}")
                 progress_bar.update(1)
                 return
@@ -167,14 +167,17 @@ class PipelineOrchestrator:
                 transcript_text = format_transcript_for_llm(transcript, intro_offset=intro_offset, outro_offset=outro_offset)
                 segments: List[ViralSegment] = await loop.run_in_executor(
                     None,
-                    analyze_transcript,
-                    transcript_text,
-                    max_clips,
-                    self.config.gemini_api_key,
-                    self.prompt_template,
-                    transcript.duration,
-                    intro_offset,
-                    outro_offset,
+                    functools.partial(
+                        analyze_transcript,
+                        transcript_text=transcript_text,
+                        max_clips=max_clips,
+                        api_key=self.config.gemini_api_key,
+                        prompt_template=self.prompt_template,
+                        video_duration=transcript.duration,
+                        intro_offset=intro_offset,
+                        outro_offset=outro_offset,
+                        force_refresh=getattr(self.config, "force_rerender", False),
+                    )
                 )
 
                 if not segments:

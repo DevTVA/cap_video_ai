@@ -79,8 +79,8 @@ class Style5(BaseStyle):
         return "bottom"
 
     def get_highlight_color(self) -> str:
-        """Màu Highlight MÀU VÀNG ("yellow")."""
-        return "yellow"
+        """Màu Highlight MÀU XANH LÁ ("green")."""
+        return "green"
 
     def get_font_size(self) -> int:
         """Cỡ font 66pt."""

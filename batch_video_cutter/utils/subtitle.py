@@ -276,11 +276,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                 start_time = _seconds_to_ass_time(w_start)
                 end_time = _seconds_to_ass_time(w_end)
 
-                if highlight_color_name.lower() in COLOR_MAP and highlight_color_name.lower() != "dynamic":
-                    active_color_hex = COLOR_MAP[highlight_color_name.lower()]
-                else:
-                    active_color_hex = dynamic_colors[color_counter % len(dynamic_colors)]
-                    color_counter += 1
+                active_color_hex = COLOR_MAP["green"]
 
                 mid_point = len(chunk) // 2 if len(chunk) >= 3 else len(chunk)
                 line1_words = chunk[:mid_point]

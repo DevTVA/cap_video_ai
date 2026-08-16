@@ -9,6 +9,7 @@ Ensures 100% frame-accurate timing and exact pixel positioning.
 
 import re
 import random
+import functools
 from collections import deque
 from pathlib import Path
 from typing import List, Tuple, Optional
@@ -40,6 +41,7 @@ def _hex_to_rgba(color_str: str) -> Tuple[int, int, int, int]:
     return (255, 255, 255, 255)
 
 
+@functools.lru_cache(maxsize=32)
 def _get_font(font_name: str, font_size: int) -> ImageFont.FreeTypeFont:
     """Tải chính xác font Impact CapCut cổ điển kinh điển từ first commit (C:/Windows/Fonts/impact.ttf)."""
     fonts_dir = Path(__file__).parent.parent / "assets" / "fonts"
@@ -95,37 +97,61 @@ ENGLISH_STOP_WORDS = {
 
 def _split_words_by_rhythm_and_punctuation(
     words_list: List[Tuple[str, float, float]],
-    max_words: int = 5,
+    max_words: int = 6,
+    max_chars: int = 24,
 ) -> List[List[Tuple[str, float, float]]]:
-    """Ngắt cụm từ phụ đề theo Dấu câu (Punctuation) và Khoảng dừng hít thở giữa thoại (Pause detection)."""
+    """Ngắt cụm từ phụ đề theo Dấu câu (Punctuation), Khoảng dừng hít thở (Pause), Số từ (<=6) VÀ Giới hạn ký tự (<=24)."""
     if not words_list:
         return []
 
-    chunks: List[List[Tuple[str, float, float]]] = []
+    raw_chunks: List[List[Tuple[str, float, float]]] = []
     current_chunk: List[Tuple[str, float, float]] = []
 
     for i, w_info in enumerate(words_list):
         w_word, w_start, w_end = w_info
         current_chunk.append(w_info)
 
+        chunk_text = " ".join(w[0].strip() for w in current_chunk)
         has_punctuation = any(w_word.strip().endswith(p) for p in PUNCTUATION_ENDINGS)
 
         has_pause = False
         if i < len(words_list) - 1:
             next_start = words_list[i + 1][1]
-            if next_start - w_end > 0.22:
+            if next_start - w_end > 0.40:
                 has_pause = True
 
-        is_max_length = len(current_chunk) >= max_words
+        is_max_words = len(current_chunk) >= max_words
+        is_max_chars = len(chunk_text) >= max_chars
 
-        if has_punctuation or has_pause or is_max_length:
-            chunks.append(current_chunk)
+        if has_punctuation or has_pause or is_max_words or is_max_chars:
+            raw_chunks.append(current_chunk)
             current_chunk = []
 
     if current_chunk:
-        chunks.append(current_chunk)
+        raw_chunks.append(current_chunk)
 
-    return chunks
+    # Post-process: Gộp cụm quá ngắn (< 0.45s hoặc <= 2 từ) với cụm liền sau để giữ câu thoại tĩnh mượt 100% chuẩn CapCut Pro
+    merged_chunks: List[List[Tuple[str, float, float]]] = []
+    for chunk in raw_chunks:
+        if not merged_chunks:
+            merged_chunks.append(chunk)
+            continue
+
+        prev = merged_chunks[-1]
+        prev_dur = prev[-1][2] - prev[0][1]
+        prev_text = " ".join(w[0].strip() for w in prev)
+        curr_text = " ".join(w[0].strip() for w in chunk)
+
+        combined_words = len(prev) + len(chunk)
+        combined_chars = len(prev_text) + 1 + len(curr_text)
+        has_prev_punc = any(prev[-1][0].strip().endswith(p) for p in PUNCTUATION_ENDINGS)
+
+        if (prev_dur < 0.45 or len(prev) <= 2) and not has_prev_punc and combined_words <= max_words and combined_chars <= (max_chars + 4):
+            merged_chunks[-1] = prev + chunk
+        else:
+            merged_chunks.append(chunk)
+
+    return merged_chunks
 
 
 def _select_emphasis_words_in_chunk(chunk: List[Tuple[str, float, float]]) -> set:
@@ -152,15 +178,15 @@ def _render_single_chunk_frame(
     chunk: List[Tuple[str, float, float]],
     line1_words: List[Tuple[str, float, float]],
     line2_words: List[Tuple[str, float, float]],
-    active_emphasis_idx: Optional[int],
-    font: ImageFont.FreeTypeFont,
-    font_size: int,
-    primary_rgba: Tuple[int, int, int, int],
-    highlight_rgba: Tuple[int, int, int, int],
-    canvas_size: Tuple[int, int],
-    margin_v: int,
-    position: str,
-    emoji_img: Optional[Image.Image],
+    active_emphasis_indices: Optional[tuple] = None,
+    font: ImageFont.FreeTypeFont = None,
+    font_size: int = 66,
+    primary_rgba: Tuple[int, int, int, int] = (255, 255, 255, 255),
+    highlight_rgba: Tuple[int, int, int, int] = (0, 255, 0, 255),
+    canvas_size: Tuple[int, int] = (1080, 1080),
+    margin_v: int = 180,
+    position: str = "bottom",
+    emoji_img: Optional[Image.Image] = None,
     font_name: str = "Impact",
 ) -> Image.Image:
     """Render 1 frame PNG với 2X Super-Sampling Anti-Aliasing, Phóng to từ nhấn 1.15X & Dynamic 3D Emoji Pop-Up chuẩn CapCut Pro."""
@@ -183,6 +209,18 @@ def _render_single_chunk_frame(
 
     bbox2 = font_2x.getbbox(l2_text) if l2_text else (0, 0, 0, 0)
     l2_width = bbox2[2] - bbox2[0]
+
+    # Tự động thu nhỏ font chữ nếu bề ngang câu vượt quá giới hạn an toàn (chừa sẵn lề cho Emoji 3D)
+    max_allowed_text_w = canvas_2x[0] - (360 if emoji_img else 200)
+    max_line_w = max(l1_width, l2_width)
+    if max_line_w > max_allowed_text_w and max_line_w > 0:
+        scale_factor = max_allowed_text_w / float(max_line_w)
+        font_size_2x = max(int(font_size_2x * scale_factor), 40)
+        font_2x = _get_font(font_name, font_size_2x)
+        bbox1 = font_2x.getbbox(l1_text) if l1_text else (0, 0, 0, 0)
+        l1_width = bbox1[2] - bbox1[0]
+        bbox2 = font_2x.getbbox(l2_text) if l2_text else (0, 0, 0, 0)
+        l2_width = bbox2[2] - bbox2[0]
 
     eff_margin_v = (330 if canvas_size[1] > 1080 else margin_v) * scale
     if position == "top":
@@ -207,10 +245,10 @@ def _render_single_chunk_frame(
             if not clean_w:
                 continue
 
-            is_active = (idx == active_emphasis_idx)
+            is_active = (idx in active_emphasis_indices) if active_emphasis_indices else False
             current_font = font_2x
             color = highlight_rgba if is_active else primary_rgba
-            stroke_w = max(8, int(12 * (font_size / 66.0)))
+            stroke_w = max(12, int(14 * (font_size / 66.0)))
             y_pos = y1
 
             # Soft Drop Shadow 2X
@@ -252,10 +290,10 @@ def _render_single_chunk_frame(
             if not clean_w:
                 continue
 
-            is_active = (idx == active_emphasis_idx)
+            is_active = (idx in active_emphasis_indices) if active_emphasis_indices else False
             current_font = font_2x
             color = highlight_rgba if is_active else primary_rgba
-            stroke_w = max(8, int(12 * (font_size / 66.0)))
+            stroke_w = max(12, int(14 * (font_size / 66.0)))
             y_pos = y2
 
             shadow_draw.text(
@@ -322,15 +360,15 @@ def generate_graphic_subtitles(
     font = _get_font(font_name, font_size)
     primary_rgba = (255, 255, 255, 255) # Mặc định TRẮNG TƯƠI cho tất cả từ
 
-    if highlight_color_name.lower() in ("green", "neon_green"):
-        highlight_rgba = (0, 255, 0, 255)
-    else:
-        highlight_rgba = (255, 255, 0, 255)
+    # Mặc định XANH LÁ NEON (Green #00FF00) cố định 100% cho tất cả các phong cách theo yêu cầu
+    highlight_rgba = (0, 255, 0, 255)
 
     graphic_results: List[Tuple[Path, float, float]] = []
     frame_count = 0
 
-    for line_idx, line in enumerate(subtitle_lines):
+    # 1. Gom tất cả từ thoại thành 1 luồng từ liên tục (Continuous Word Stream) triệt tiêu trùng lồng mốc thời gian
+    all_words = []
+    for line in subtitle_lines:
         words_list = line.words
         if not words_list and line.text.strip():
             raw_words = line.text.strip().split()
@@ -340,150 +378,235 @@ def generate_graphic_subtitles(
                     (w, line.start + i * dur, line.start + (i + 1) * dur)
                     for i, w in enumerate(raw_words)
                 ]
+        if words_list:
+            for w in words_list:
+                if w[2] > w[1]:
+                    all_words.append((w[0], round(w[1], 3), round(w[2], 3)))
 
-        if not words_list:
+    # Sắp xếp tuyệt đối theo thời gian bắt đầu
+    all_words.sort(key=lambda x: (x[1], x[2]))
+
+    # Khử đè lồng mốc thời gian giữa các từ thoại từ Whisper
+    sanitized_words = []
+    for w_text, w_start, w_end in all_words:
+        if sanitized_words:
+            prev_w, prev_s, prev_e = sanitized_words[-1]
+            if w_start < prev_e:
+                w_start = prev_e
+        if w_end > w_start + 0.01:
+            sanitized_words.append((w_text, w_start, w_end))
+
+    # Chia cụm từ luồng thoại liên tục
+    chunks = _split_words_by_rhythm_and_punctuation(sanitized_words, max_words=6, max_chars=24)
+
+    for chunk_idx, chunk in enumerate(chunks):
+        if not chunk:
             continue
 
-        # 1. Chia cụm thông minh theo Nhịp thoại & Dấu câu (Speech-Rhythm & Punctuation)
-        chunks = _split_words_by_rhythm_and_punctuation(words_list, max_words=5)
+        chunk_start = chunk[0][1]
+        chunk_end = chunk[-1][2]
 
-        for chunk_idx, chunk in enumerate(chunks):
-            if not chunk:
+        # Xóa sạch phụ đề ở khoảng thời gian Outcard cuối video
+        if outcard_start_s is not None:
+            if chunk_start >= outcard_start_s:
                 continue
+            chunk_end = min(chunk_end, outcard_start_s)
 
-            chunk_start = chunk[0][1]
-            chunk_end = chunk[-1][2]
+        if chunk_start >= chunk_end:
+            continue
 
-            # Xóa sạch phụ đề ở khoảng thời gian Outcard cuối video
+        # Chỉ chọn 1 từ nhấn mạnh NẾU cụm dài >= 4 từ
+        emphasis_indices = _select_emphasis_words_in_chunk(chunk)
+
+        # Xác định Emoji màu 3D
+        chunk_emoji = None
+        emoji_img = None
+        if emoji_on_top:
+            chunk_text = " ".join(w[0] for w in chunk)
+            chunk_emoji = extract_emoji_for_phrase(chunk_text, fallback_default=False, random_prob=0.5)
+            if not chunk_emoji and chunk_idx == 0:
+                chunk_emoji = extract_emoji_for_phrase(chunk_text, fallback_default=True)
+
+            if chunk_emoji:
+                emoji_png_path = get_emoji_png_path(chunk_emoji)
+                if emoji_png_path and Path(emoji_png_path).exists():
+                    try:
+                        emoji_img = Image.open(emoji_png_path).convert("RGBA")
+                        emoji_img = emoji_img.resize((65, 65), Image.Resampling.LANCZOS)
+                    except Exception as e:
+                        logger.warning(f"Không thể nạp ảnh emoji {emoji_png_path}: {e}")
+                        emoji_img = None
+
+        # Chia chunk làm 2 dòng nếu có từ 3 từ trở lên
+        mid_point = len(chunk) // 2 if len(chunk) >= 3 else len(chunk)
+        line1_words = chunk[:mid_point]
+        line2_words = chunk[mid_point:]
+
+        # 2. Xây dựng mốc thời gian Highlight Beat Accumulation (Gom từ động theo tốc độ nói)
+        time_intervals = []
+        n_words = len(chunk)
+        chunk_dur = max(chunk_end - chunk_start, 0.1)
+        words_per_sec = n_words / chunk_dur
+
+        # Tính động min_beat_duration: nói càng nhanh (words_per_sec lớn), ngưỡng gộp nhịp càng nhỏ (0.05s-0.08s)
+        if words_per_sec >= 4.0:
+            min_beat_duration = 0.05
+        elif words_per_sec >= 3.0:
+            min_beat_duration = 0.07
+        else:
+            min_beat_duration = 0.08
+
+        idx_curr = 0
+        while idx_curr < n_words:
+            beat_start = chunk_start if idx_curr == 0 else max(chunk[idx_curr - 1][2], chunk[idx_curr][1])
+            beat_end = chunk[idx_curr][2]
+            idx_next = idx_curr + 1
+            while (beat_end - beat_start) < min_beat_duration and idx_next < n_words:
+                beat_end = chunk[idx_next][2]
+                idx_next += 1
+
+            if idx_next < n_words:
+                beat_end = chunk[idx_next][1]
+            else:
+                beat_end = chunk_end
+
+            active_indices = tuple(range(idx_curr, max(idx_curr + 1, idx_next)))
+            if beat_end > beat_start + 0.02:
+                time_intervals.append((active_indices, beat_start, beat_end))
+
+            idx_curr = max(idx_curr + 1, idx_next)
+
+        if not time_intervals:
+            time_intervals = [(None, chunk_start, chunk_end)]
+
+        # Cache frame composite để tránh render lặp
+        rendered_frames = {}
+
+        for active_emph_idx, interval_s, interval_e in time_intervals:
             if outcard_start_s is not None:
-                if chunk_start >= outcard_start_s:
+                if interval_s >= outcard_start_s:
                     continue
-                chunk_end = min(chunk_end, outcard_start_s)
+                interval_e = min(interval_e, outcard_start_s)
 
-            if chunk_start >= chunk_end:
+            if interval_e <= interval_s:
                 continue
 
-            # Chỉ chọn 1 từ nhấn mạnh NẾU cụm dài >= 4 từ
-            emphasis_indices = _select_emphasis_words_in_chunk(chunk)
+            if active_emph_idx not in rendered_frames:
+                rendered_frames[active_emph_idx] = _render_single_chunk_frame(
+                    chunk=chunk,
+                    line1_words=line1_words,
+                    line2_words=line2_words,
+                    active_emphasis_indices=active_emph_idx,
+                    font=font,
+                    font_size=font_size,
+                    primary_rgba=primary_rgba,
+                    highlight_rgba=highlight_rgba,
+                    canvas_size=canvas_size,
+                    margin_v=margin_v,
+                    position=position,
+                    emoji_img=emoji_img,
+                    font_name=font_name,
+                )
 
-            # Xác định Emoji màu 3D
-            chunk_emoji = None
-            emoji_img = None
-            if emoji_on_top:
-                chunk_text = " ".join(w[0] for w in chunk)
-                chunk_emoji = extract_emoji_for_phrase(chunk_text, fallback_default=False, random_prob=0.5)
-                if not chunk_emoji and chunk_idx == 0:
-                    chunk_emoji = extract_emoji_for_phrase(line.text, fallback_default=True)
+            composite = rendered_frames[active_emph_idx]
+            frame_count += 1
+            out_png_path = tmp_dir / f"g_sub_{frame_count:04d}.png"
+            composite.save(out_png_path, "PNG")
+            graphic_results.append((out_png_path, interval_s, interval_e))
 
-                if chunk_emoji:
-                    emoji_png_path = get_emoji_png_path(chunk_emoji)
-                    if emoji_png_path and Path(emoji_png_path).exists():
-                        try:
-                            emoji_img = Image.open(emoji_png_path).convert("RGBA")
-                            emoji_img = emoji_img.resize((65, 65), Image.Resampling.LANCZOS)
-                        except Exception as e:
-                            logger.warning(f"Không thể nạp ảnh emoji {emoji_png_path}: {e}")
-                            emoji_img = None
-
-            # Chia chunk làm 2 dòng nếu có từ 3 từ trở lên
-            mid_point = len(chunk) // 2 if len(chunk) >= 3 else len(chunk)
-            line1_words = chunk[:mid_point]
-            line2_words = chunk[mid_point:]
-
-            # 2. Xây dựng mốc thời gian Karaoke đổi màu lần lượt từng từ theo nhịp đọc thoại thực tế (Chuẩn CapCut Karaoke)
-            time_intervals = []
-            n_words = len(chunk)
-            for idx in range(n_words):
-                w_text, w_start, w_end = chunk[idx]
-                s = chunk_start if idx == 0 else max(chunk[idx - 1][2], w_start)
-                if idx < n_words - 1:
-                    e = chunk[idx + 1][1]
-                else:
-                    e = chunk_end
-
-                if e > s + 0.02:
-                    time_intervals.append((idx, s, e))
-
-            if not time_intervals:
-                time_intervals = [(None, chunk_start, chunk_end)]
-
-            # Cache frame composite để tránh render lặp
-            rendered_frames = {}
-
-            for active_emph_idx, interval_s, interval_e in time_intervals:
-                if outcard_start_s is not None:
-                    if interval_s >= outcard_start_s:
-                        continue
-                    interval_e = min(interval_e, outcard_start_s)
-
-                if interval_e <= interval_s:
-                    continue
-
-                if active_emph_idx not in rendered_frames:
-                    rendered_frames[active_emph_idx] = _render_single_chunk_frame(
-                        chunk=chunk,
-                        line1_words=line1_words,
-                        line2_words=line2_words,
-                        active_emphasis_idx=active_emph_idx,
-                        font=font,
-                        font_size=font_size,
-                        primary_rgba=primary_rgba,
-                        highlight_rgba=highlight_rgba,
-                        canvas_size=canvas_size,
-                        margin_v=margin_v,
-                        position=position,
-                        emoji_img=emoji_img,
-                        font_name=font_name,
-                    )
-
-                composite = rendered_frames[active_emph_idx]
-                frame_count += 1
-                out_png_path = tmp_dir / f"g_sub_{frame_count:04d}.png"
-                composite.save(out_png_path, "PNG")
-                graphic_results.append((out_png_path, interval_s, interval_e))
-
-    # Khử chớp nháy Anti-Flicker & Trám liền mạch 100% khoảng lặng (Triệt tiêu hoàn toàn giật chớp tắt)
-    if graphic_results:
-        # Pass 1: Sắp xếp theo (start_time, end_time) và kéo dài e = next_s nếu khoảng lặng < 0.60s
+        sanitized = []
         graphic_results.sort(key=lambda x: (x[1], x[2]))
-        pass1 = []
-        n = len(graphic_results)
-        for i in range(n):
-            path, s, e = graphic_results[i]
+        for path, s, e in graphic_results:
             if outcard_start_s is not None:
                 if s >= outcard_start_s:
                     continue
                 e = min(e, outcard_start_s)
 
-            if i < n - 1:
-                next_s = graphic_results[i + 1][1]
-                # Trám khe hở < 0.60s giữ phụ đề nối tiếp liên tục 100% không chớp tắt
-                if next_s > s and (next_s - e) < 0.60:
-                    e = next_s
-                elif e > next_s:
-                    e = next_s
-
-            if outcard_start_s is not None:
-                e = min(e, outcard_start_s)
-
-            if e > s + 0.02:
-                pass1.append((path, round(s, 3), round(e, 3)))
-
-        # Pass 2: Khống chế s >= prev_e loại bỏ hoàn toàn 100% đè lớp FFmpeg
-        sanitized = []
-        for path, s, e in pass1:
             if sanitized:
                 prev_path, prev_s, prev_e = sanitized[-1]
+                # Nếu mốc s của khung sau nhỏ hơn prev_e của khung trước, triệt tiêu đè chữ bằng cách ngắt prev_e = s - 0.001
                 if s < prev_e:
-                    s = prev_e
+                    prev_e_new = round(s - 0.001, 3)
+                    if prev_e_new > prev_s + 0.01:
+                        sanitized[-1] = (prev_path, prev_s, prev_e_new)
+                    else:
+                        sanitized.pop()
 
-            if e > s + 0.02:
+            if e > s + 0.01:
                 sanitized.append((path, round(s, 3), round(e, 3)))
 
-        graphic_results = sanitized
+        # Cho phép khoảng nghỉ thở tự nhiên (Breathing Pause >= 0.25s) ở cuối các câu thoại để phụ đề nghỉ nhịp không bị đập liên tục
+        final_list = []
+        n = len(sanitized)
+        for i in range(n):
+            path, s, e = sanitized[i]
+            if i < n - 1:
+                next_s = sanitized[i + 1][1]
+                # Chỉ trám khoảng lặng cực ngắn (< 0.22s), chừa 0.25s-0.50s nghỉ nhịp thở giữa các câu thoại
+                if next_s > s and (next_s - e) < 0.22:
+                    e = round(next_s - 0.001, 3)
 
-    logger.info(f"Đã tạo {len(graphic_results)} khung ảnh phụ đề đồ họa Super-Sampling 2X mượt căng tại {tmp_dir}")
+            if e > s + 0.01:
+                final_list.append((path, round(s, 3), round(e, 3)))
+
+        graphic_results = final_list
+
+    logger.info(f"Đã tạo {len(graphic_results)} khung ảnh phụ đề đồ họa PNG Super-Sampling 2X (tổng số PNG: {len(graphic_results)}) mượt căng tại {tmp_dir}")
     return graphic_results
+
+
+def generate_concat_manifest(
+    graphic_results: List[Tuple[Path, float, float]],
+    tmp_dir: Path,
+    canvas_size: Tuple[int, int] = (1080, 1080),
+    outcard_start_s: Optional[float] = None,
+    clip_duration: Optional[float] = None,
+) -> Path:
+    """Tạo file concat manifest g_subs_concat.txt và ảnh blank.png để nạp vào FFmpeg qua 1 overlay filter duy nhất, triệt tiêu 100% chớp nháy và đảm bảo sạch phụ đề ở phần Outcard."""
+    tmp_dir = Path(tmp_dir)
+    blank_png = tmp_dir / "blank_transparent.png"
+    if not blank_png.exists():
+        img = Image.new("RGBA", canvas_size, (0, 0, 0, 0))
+        img.save(blank_png, "PNG")
+
+    manifest_path = tmp_dir / "g_subs_concat.txt"
+    lines = []
+
+    # Ngắt tất cả mốc phụ đề trước khi vào Outcard
+    cut_limit = outcard_start_s if outcard_start_s is not None else clip_duration
+
+    current_time = 0.0
+    for path, s, e in graphic_results:
+        if cut_limit is not None and s >= cut_limit:
+            continue
+        if cut_limit is not None:
+            e = min(e, cut_limit)
+
+        if s > current_time + 0.005:
+            gap_dur = s - current_time
+            lines.append(f"file '{blank_png.resolve().as_posix()}'")
+            lines.append(f"duration {gap_dur:.3f}")
+            current_time = s
+
+        dur = e - s
+        if dur > 0.005:
+            lines.append(f"file '{path.resolve().as_posix()}'")
+            lines.append(f"duration {dur:.3f}")
+            current_time = e
+
+    # Đảm bảo 100% từ current_time đến hết clip (phần Outcard) là blank_transparent.png
+    end_target = clip_duration if clip_duration is not None else (outcard_start_s if outcard_start_s is not None else current_time)
+    if end_target > current_time + 0.005:
+        gap_dur = end_target - current_time
+        lines.append(f"file '{blank_png.resolve().as_posix()}'")
+        lines.append(f"duration {gap_dur:.3f}")
+        current_time = end_target
+
+    # Dòng file cuối cùng trong manifest (không có duration) PHẢI LÀ blank_transparent.png
+    lines.append(f"file '{blank_png.resolve().as_posix()}'")
+
+    manifest_path.write_text("\n".join(lines), encoding="utf-8")
+    return manifest_path
 
 
 CENSOR_DICTIONARY = {

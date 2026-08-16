@@ -178,6 +178,14 @@ INTRO_KEYWORDS = [
     "welcome to the show", "welcome to our channel", "in today's show", "before we start",
     "make sure to", "hit that button", "leave a comment", "welcome back to", "this episode is",
     "on today's show", "in this episode", "welcome everyone", "welcome all", "on the show", "today on the show",
+    # TV Show Branding, Host Names, Judge Names, Promo Cards & Bumper Graphics
+    "divorce court", "judge lynn", "judge toler", "lynn toler", "judge lauren", "lauren lake",
+    "we the people", "courtroom", "the honorable", "judge",
+    "facebook.com", "facebook", "tell us what you think", "what do you think", "do you believe",
+    "social media", "comment below", "visit our", "tweet us", "follow us", "hashtag",
+    "call in", "vote now", "opinion", "coming up next", "when we return", "after the break",
+    "show branding", "promo", "music 🎵", "[music]", "(music)", "music", "applause", "[applause]",
+    "(applause)", "cheering", "[cheering]", "theme song", "theme", "intro", "outro", "commercial", "bumper", "station id",
     # Vietnamese keywords
     "chào mừng", "đăng ký kênh", "tập hôm nay", "xin chào các bạn", "chủ đề hôm nay",
     "cảm ơn đã xem", "đăng ký ngay", "chương trình hôm nay", "chào mừng quay trở lại",
@@ -186,7 +194,7 @@ INTRO_KEYWORDS = [
 
 
 def is_intro_or_monologue_line(text: str) -> bool:
-    """Kiểm tra xem thoại có chứa từ khóa giới thiệu show / host monologue hay không."""
+    """Kiểm tra xem thoại có chứa từ khóa giới thiệu show / branding / promo hay không."""
     if not text:
         return False
     t_lower = text.lower()
@@ -194,6 +202,46 @@ def is_intro_or_monologue_line(text: str) -> bool:
         if ik in t_lower:
             return True
     return False
+
+
+def is_segment_clean_and_valid(transcript_text: str, start_time: float, end_time: float) -> bool:
+    """Vòng lặp kiểm tra toàn bộ thời lượng segment [start_time, end_time].
+    Đảm bảo 100% không dính bất kỳ từ khóa Show Branding, Promo Card hay Monologue nào.
+    """
+    if not transcript_text:
+        return True
+
+    lines_count = 0
+    total_words = 0
+    # Kiểm tra từng câu thoại đơn lẻ nằm trong khoảng thời gian [start_time, end_time]
+    for line in transcript_text.splitlines():
+        line_str = line.strip()
+        if not line_str:
+            continue
+        ts_match = re.search(r"\[(\d{1,2}:\d{2}(?::\d{2})?)\]", line_str)
+        if ts_match:
+            t_sec = _parse_timecode_to_seconds(ts_match.group(1))
+            if start_time <= t_sec <= end_time:
+                text_part = re.sub(r"\[.*?\]", "", line_str).strip()
+                if text_part:
+                    if is_intro_or_monologue_line(text_part):
+                        return False
+                    words = [w for w in text_part.split() if len(w) > 1]
+                    total_words += len(words)
+                    lines_count += 1
+
+    spoken_text = _extract_spoken_text_in_range(transcript_text, start_time, end_time)
+    if spoken_text:
+        if is_intro_or_monologue_line(spoken_text):
+            return False
+        if score_dialogue_quality(spoken_text) < 0.5:
+            return False
+
+    # Phân đoạn 25-29s chứa ít hơn 10 từ thoại (đoạn rỗng logo promo/station graphic) -> BỎ QUA HOÀN TOÀN
+    if total_words < 10:
+        return False
+
+    return True
 
 
 def _extract_spoken_text_in_range(
@@ -368,18 +416,6 @@ def _parse_llm_response_text(response_text: str) -> List[dict]:
             title_vi = ""
 
             j = i + 1
-            # Tìm English title (dòng không trống tiếp theo)
-            while j < len(lines):
-                next_line = lines[j].strip()
-                if not next_line:
-                    j += 1
-                    continue
-                if re.match(r"^\d+\.", next_line) or re.search(r"^\s*(?:SEGMENT|CLIP|VIRAL SEGMENT|TIME)\s*\d*", next_line, re.IGNORECASE) or "SECONDS)" in next_line.upper():
-                    break
-                title_en = next_line
-                j += 1
-                break
-
             # Tìm Vietnamese title (dòng không trống tiếp theo)
             while j < len(lines):
                 next_line = lines[j].strip()
@@ -414,6 +450,7 @@ def analyze_transcript(
     video_duration: float = 0.0,
     intro_offset: float = 0.0,
     outro_offset: float = 0.0,
+    force_refresh: bool = False,
 ) -> List[ViralSegment]:
     """Phân tích transcript để tìm viral segments bằng Gemini/Groq/OpenRouter API.
 
@@ -423,8 +460,9 @@ def analyze_transcript(
         api_key: API key cho Gemini.
         prompt_template: Prompt template tùy chỉnh.
         video_duration: Thời lượng video (giây), dùng để validate.
-        intro_offset: Bỏ số giây đầu (10s cho Style 1 & 2).
-        outro_offset: Bỏ số giây cuối (25s cho Style 1 & 2).
+        intro_offset: Bỏ số giây đầu (35s cho tất cả các phong cách).
+        outro_offset: Bỏ số giây cuối (25s).
+        force_refresh: Ép buộc phân tích lại từ đầu qua AI API, bỏ qua Local Cache.
 
     Returns:
         Danh sách ViralSegment.
@@ -438,12 +476,21 @@ def analyze_transcript(
             "hoặc truyền qua --api-key"
         )
 
-    # Kiểm tra bộ nhớ tạm (Cache) trước khi gọi API (chỉ dùng nếu cache có đủ max_clips)
+    # Kiểm tra bộ nhớ tạm (Cache) nếu không bật force_refresh
     cache_key = _get_cache_key(transcript_text, max_clips, prompt_template)
-    cached_segments = _read_cache(cache_key)
-    if cached_segments and len(cached_segments) >= max_clips:
-        logger.info(f"⚡ Tìm thấy {len(cached_segments)} viral segments trong Local Cache! (Không tốn API request)")
-        return cached_segments
+    if not force_refresh:
+        cached_segments = _read_cache(cache_key)
+        if cached_segments and len(cached_segments) >= max_clips:
+            valid_cached = []
+            for seg in cached_segments:
+                if intro_offset > 0 and seg.start_time < intro_offset:
+                    continue
+                if is_segment_clean_and_valid(transcript_text, seg.start_time, seg.end_time):
+                    valid_cached.append(seg)
+
+            if len(valid_cached) >= max_clips:
+                logger.info(f"⚡ Tìm thấy {len(valid_cached)} viral segments đạt chuẩn trong Local Cache!")
+                return valid_cached
 
     # Xây dựng prompt
     if prompt_template:
@@ -551,7 +598,7 @@ def _generate_fallback_segments(
         if line and "[" in line and "]" in line:
             parts = line.split("]", 1)
             text_part = parts[1].strip() if len(parts) > 1 else ""
-            if text_part and score_dialogue_quality(text_part) >= 0.5:
+            if text_part and score_dialogue_quality(text_part) >= 0.5 and not is_intro_or_monologue_line(text_part):
                 lines.append(text_part)
                 
     if not lines:
@@ -1009,13 +1056,13 @@ def _convert_raw_segments(
         if is_overlapping:
             continue
 
-        # 3.5 KIỂM TRA CHỐNG DÍNH GIỚI THIỆU SHOW (Show Intro & Monologue Check):
+        # 3.5 KIỂM TRA CHỐNG DÍNH GIỚI THIỆU SHOW & PROMO CARD (Full Duration Check):
         if transcript_text:
-            spoken_text = _extract_spoken_text_in_range(transcript_text, start_time, start_time + 10.0)
-            if is_intro_or_monologue_line(spoken_text):
+            if not is_segment_clean_and_valid(transcript_text, start_time, end_time):
+                spoken_text = _extract_spoken_text_in_range(transcript_text, start_time, end_time)
                 logger.warning(
-                    f"Segment {i+1} [{start_time:.1f}s -> {end_time:.1f}s]: Mở đầu thoại '{spoken_text[:60]}...' "
-                    f"dính từ khóa giới thiệu show/MC monologue, BỎ QUA HOÀN TOÀN!"
+                    f"Segment {i+1} [{start_time:.1f}s -> {end_time:.1f}s]: Thoại '{spoken_text[:60]}...' "
+                    f"dính từ khóa giới thiệu show / promo card / monologue, BỎ QUA HOÀN TOÀN!"
                 )
                 continue
 
@@ -1115,10 +1162,11 @@ def _convert_raw_segments(
             st = valid_start + step * (fill_i + 1)
             et = min(valid_end, st + 27.0)
             if transcript_text:
-                spoken = _extract_spoken_text_in_range(transcript_text, st, st + 10.0)
-                if is_intro_or_monologue_line(spoken):
-                    st = min(valid_end - 27.0, st + 20.0)
+                shift_attempts = 0
+                while shift_attempts < 15 and not is_segment_clean_and_valid(transcript_text, st, et):
+                    st = min(valid_end - 27.0, st + 15.0)
                     et = min(valid_end, st + 27.0)
+                    shift_attempts += 1
             if et - st < 25.0:
                 st = max(valid_start, et - 27.0)
 
