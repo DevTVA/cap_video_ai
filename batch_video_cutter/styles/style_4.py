@@ -12,6 +12,7 @@ class Style4(BaseStyle):
     """Phong cách 4: Canvas 3:4 Nền Đen + Top Single White Badge Black Quote Title + Subtitle Highlight Xanh Lá (Chuẩn phong cách 4.mp4)."""
 
     CAPTION_HEIGHT_RATIO = 0.1944  # 280px / 1440px
+    style_index: int = 4
 
     @property
     def name(self) -> str:
@@ -89,6 +90,7 @@ class Style4(BaseStyle):
         return False
 
     def get_max_clips(self) -> Optional[int]:
-        """Phong cách 4 cắt 4 đoạn viral."""
-        return 4
+        """Phong cách 4 cắt 3 đoạn viral."""
+        return 3
+
 

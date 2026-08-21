@@ -1,7 +1,7 @@
-"""Style 5: Chuẩn 100% theo mẫu phong cách 5.mp4 gốc (Canvas 3:4 1080x1440):
-- Top Caption: Dải nền màu Xanh Dương (RGB 85, 118, 251 / #5576FB), Chữ Montserrat-Bold màu TRẮNG tinh Viết Hoa 100%, tự động chia 2 dòng cân đối (không dùng White Badge bo góc và không nháy nháy kép).
-- Video Stream: Canvas 3:4 (1080x1440), Video zoom 150% CapCut style đặt cân đối ở trung tâm canvas.
-- Graphic Subtitles: Font Impact CapCut (66pt), Active Word Highlight VÀNG ("yellow"), lề chân tĩnh.
+"""Style 5: Canvas 1:1 (1080x1080) Dải Nền Xanh Dương + Top Impact Title + Subtitle Highlight Vàng:
+- Top Caption: Dải Nền Xanh Dương (Royal Blue RGB 41, 67, 150, 180px), Chữ Impact màu TRẮNG tinh Viết Hoa kèm stroke đen 3px.
+- Video Stream: Canvas 1:1 (1080x1080), Video zoom 150% CapCut style đặt từ y=180px đến y=1080px (giống Style 3).
+- Graphic Subtitles: Font Impact CapCut (66pt), Active Word Highlight VÀNG ("yellow").
 """
 
 from typing import Optional, Tuple
@@ -9,26 +9,26 @@ from .base import BaseStyle, CaptionArea
 
 
 class Style5(BaseStyle):
-    """Phong cách 5: Canvas 3:4 + Top Blue Background Banner White Title + Subtitle Highlight Vàng (Chuẩn phong cách 5.mp4)."""
+    """Phong cách 5: Canvas 1:1 Dải Nền Xanh Dương Tiêu Đề Chữ Trắng Impact + Highlight Vàng."""
 
-    CAPTION_HEIGHT_RATIO = 0.1944  # 280px / 1440px
+    CAPTION_HEIGHT_RATIO = 0.1667  # 180px / 1080px
     style_index: int = 5
 
     @property
     def name(self) -> str:
-        return "Style 5 - 3:4 Canvas + Top Blue Background Banner White Title + Yellow Highlight Subtitle (Mẫu phong cách 5.mp4)"
+        return "Style 5 - 1:1 Canvas + Top Blue Banner White Impact Title + Yellow Highlight Subtitle"
 
     @property
     def aspect_ratio(self) -> str:
-        return "3:4"
+        return "1:1"
 
     def get_output_resolution(self) -> Tuple[int, int]:
-        """Output 1080x1440 (3:4)."""
-        return (1080, 1440)
+        """Output 1080x1080 (1:1)."""
+        return (1080, 1080)
 
     def get_caption_area(self) -> Optional[CaptionArea]:
         out_w, out_h = self.get_output_resolution()
-        caption_h = 280
+        caption_h = 180
         return CaptionArea(
             x=0,
             y=0,
@@ -44,26 +44,31 @@ class Style5(BaseStyle):
         subtitle_path: Optional[str] = None,
         title_text: Optional[str] = None,
     ) -> Tuple[str, str]:
-        out_w, out_h = self.get_output_resolution()  # 1080x1440
+        out_w, out_h = self.get_output_resolution()  # 1080x1080
+        caption_h = 180  # Vùng dải nền xanh phía trên (180px)
+        video_area_h = 900  # Vùng video phía dưới (900px)
 
         if input_width <= 0 or input_height <= 0:
             input_width, input_height = 1920, 1080
 
-        # Công thức Zoom 150% CapCut chuẩn 100% (Width=1620px)
+        # Công thức Zoom 150% CapCut chuẩn 100% giống Style 3
         fit_w = out_w
         fit_h = int(input_height * (out_w / input_width))
 
         fg_w = int(fit_w * 1.5)
         fg_h = int(fit_h * 1.5)
 
-        final_h = min(fg_h, out_h)
-        crop_x = (fg_w - out_w) // 2
-        crop_y = (fg_h - final_h) // 2
-        overlay_y = (out_h - final_h) // 2  # Căn giữa khung hình trên canvas 1440px
+        if fg_h < video_area_h:
+            fg_h = video_area_h
+            fg_w = int(input_width * (fg_h / input_height))
+
+        # Căn giữa khung hình hiển thị (100% chuẩn, không bị lệch/đẩy sang trái)
+        crop_x = min(fg_w - out_w, ((fg_w - out_w) // 2) + 140)
+        crop_y = (fg_h - video_area_h) // 2
 
         filters = [
-            f"[0:v]scale={fg_w}:{fg_h},crop={out_w}:{final_h}:{crop_x}:{crop_y},"
-            f"pad={out_w}:{out_h}:0:{overlay_y}:black[styled]"
+            f"[0:v]scale={fg_w}:{fg_h},crop={out_w}:{video_area_h}:{crop_x}:{crop_y},"
+            f"pad={out_w}:{out_h}:0:{caption_h}:black[styled]"
         ]
         output_label = "[styled]"
 
@@ -79,8 +84,8 @@ class Style5(BaseStyle):
         return "bottom"
 
     def get_highlight_color(self) -> str:
-        """Màu Highlight MÀU XANH LÁ ("green")."""
-        return "green"
+        """Màu Highlight MÀU VÀNG ("yellow")."""
+        return "yellow"
 
     def get_font_size(self) -> int:
         """Cỡ font 66pt."""
@@ -90,5 +95,5 @@ class Style5(BaseStyle):
         return False
 
     def get_max_clips(self) -> Optional[int]:
-        """Phong cách 5 cắt 4 đoạn viral."""
-        return 4
+        """Phong cách 5 cắt 2 đoạn viral."""
+        return 2

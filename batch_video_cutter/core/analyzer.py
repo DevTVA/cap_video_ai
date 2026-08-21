@@ -24,6 +24,10 @@ _LLM_LOCK = threading.Lock()
 # Thư mục bộ nhớ tạm (Cache)
 _CACHE_DIR = Path(__file__).parent.parent.parent / ".cache"
 
+# Danh sách vô hiệu hóa API Keys (dành cho lỗi 401/403) và Models (dành cho lỗi 404/decommissioned) toàn session
+_DISABLED_KEYS: set[str] = set()
+_DISABLED_MODELS: set[str] = set()
+
 
 def _get_cache_key(transcript_text: str, max_clips: int, prompt_template: Optional[str] = None) -> str:
     """Tạo mã SHA-256 duy nhất đại diện cho request."""
@@ -328,24 +332,13 @@ def _parse_timecode_to_seconds(timecode: str) -> float:
 
 
 def _parse_llm_response_json(response_text: str) -> List[dict]:
-    """Parse JSON response từ LLM.
-
-    Xử lý các trường hợp:
-    - JSON thuần
-    - JSON wrapped trong markdown code block
-    - JSON có trailing text
-
-    Args:
-        response_text: Text response từ LLM.
-
-    Returns:
-        Danh sách segments dạng dict.
-    """
-    text = response_text.strip()
+    """Parse JSON response từ LLM, hỗ trợ tự động dọn dẹp markdown code blocks và thinking tags."""
+    # Loại bỏ thinking blocks nếu có (<think>...</think> hoặc <thought>...</thought>)
+    text = re.sub(r"<(?:think|thought)>.*?</(?:think|thought)>", "", response_text, flags=re.DOTALL).strip()
 
     # Loại bỏ markdown code fences
-    text = re.sub(r"^```(?:json)?\s*", "", text)
-    text = re.sub(r"\s*```$", "", text)
+    text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.MULTILINE)
+    text = re.sub(r"\s*```$", "", text, flags=re.MULTILINE)
 
     # Tìm JSON object
     try:
@@ -381,21 +374,20 @@ def _parse_llm_response_json(response_text: str) -> List[dict]:
 
 
 def _parse_llm_response_text(response_text: str) -> List[dict]:
-    """Parse text response dạng numbered list từ LLM.
+    """Parse text response dạng numbered list từ LLM theo định dạng scipt.txt.
 
     Format mong đợi:
         1. Viral Segment Time: 03:39 to 04:09
         English Title + emoji
         Vietnamese Title + emoji
 
-    Args:
-        response_text: Text response từ LLM.
-
     Returns:
-        Danh sách segments dạng dict.
+        Danh sách segments dạng dict chứa start, end, title_en, title_vi.
     """
     segments = []
-    lines = response_text.strip().split("\n")
+    # Loại bỏ thinking blocks nếu có (<think>...</think> hoặc <thought>...</thought>)
+    clean_text = re.sub(r"<(?:think|thought)>.*?</(?:think|thought)>", "", response_text, flags=re.DOTALL)
+    lines = clean_text.strip().split("\n")
 
     i = 0
     while i < len(lines):
@@ -411,22 +403,30 @@ def _parse_llm_response_text(response_text: str) -> List[dict]:
             start_tc = time_match.group(1)
             end_tc = time_match.group(2)
 
-            # Đọc các dòng tiếp theo làm title (bỏ qua dòng trống)
             title_en = ""
             title_vi = ""
 
             j = i + 1
-            # Tìm Vietnamese title (dòng không trống tiếp theo)
+            collected_titles = []
             while j < len(lines):
                 next_line = lines[j].strip()
                 if not next_line:
                     j += 1
                     continue
+                # Dừng nếu gặp header segment tiếp theo
                 if re.match(r"^\d+\.", next_line) or re.search(r"^\s*(?:SEGMENT|CLIP|VIRAL SEGMENT|TIME)\s*\d*", next_line, re.IGNORECASE) or "SECONDS)" in next_line.upper():
                     break
-                title_vi = next_line
+                collected_titles.append(next_line)
                 j += 1
-                break
+                if len(collected_titles) >= 2:
+                    break
+
+            if len(collected_titles) >= 1:
+                title_en = collected_titles[0]
+            if len(collected_titles) >= 2:
+                title_vi = collected_titles[1]
+            elif len(collected_titles) == 1:
+                title_vi = title_en
 
             i = j - 1
 
@@ -648,6 +648,25 @@ def _generate_fallback_segments(
     return segments
 
 
+def _extract_http_error_detail(e: Exception) -> str:
+    """Bóc tách thông báo lỗi chi tiết từ HTTP response body nếu có."""
+    if isinstance(e, urllib.error.HTTPError):
+        try:
+            body = e.read().decode("utf-8", errors="ignore")
+            data = json.loads(body)
+            if "error" in data:
+                err_obj = data["error"]
+                if isinstance(err_obj, dict):
+                    msg = err_obj.get("message") or err_obj.get("code") or body
+                    return f"HTTP {e.code}: {msg}"
+                elif isinstance(err_obj, str):
+                    return f"HTTP {e.code}: {err_obj}"
+            return f"HTTP {e.code}: {body[:200]}"
+        except Exception:
+            return f"HTTP {e.code}: {e.reason}"
+    return str(e)
+
+
 def _call_openrouter_api(prompt: str, openrouter_api_key: str) -> str:
     """Gọi OpenRouter.ai API miễn phí làm dự phòng cao cấp. Hỗ trợ luân phiên chuỗi nhiều API key."""
     url = "https://openrouter.ai/api/v1/chat/completions"
@@ -661,35 +680,83 @@ def _call_openrouter_api(prompt: str, openrouter_api_key: str) -> str:
     ]
     last_exc = None
     for idx, key in enumerate(keys, 1):
+        if key in _DISABLED_KEYS:
+            logger.debug(f"Bỏ qua OpenRouter API key {idx}/{len(keys)} (Đã bị vĩnh viễn vô hiệu hóa do lỗi 401/403).")
+            continue
+
         headers = {
             "Authorization": f"Bearer {key}",
             "Content-Type": "application/json",
             "HTTP-Referer": "https://github.com/AI-Agent",
             "X-Title": "Batch Video Cutter",
         }
+        key_exhausted = False
         for model_name in models_to_try:
-            try:
-                logger.debug(f"Đang thử OpenRouter API key {idx}/{len(keys)} với model '{model_name}'...")
-                data = {
-                    "model": model_name,
-                    "messages": [{"role": "user", "content": prompt}],
-                    "temperature": 0.7,
-                    "max_tokens": 2048,
-                }
-                req = urllib.request.Request(url, data=json.dumps(data).encode("utf-8"), headers=headers)
-                with urllib.request.urlopen(req, timeout=60) as resp:
-                    res_data = json.loads(resp.read().decode("utf-8"))
-                    content = res_data["choices"][0]["message"]["content"]
-                    if content and content.strip():
-                        return content
-            except Exception as e:
-                err_str = str(e)
-                logger.warning(f"OpenRouter API key {idx}/{len(keys)} model '{model_name}' thất bại: {e}")
-                last_exc = e
-                if "429" in err_str:
-                    time.sleep(2.0)
+            if key_exhausted:
+                break
+            if model_name in _DISABLED_MODELS:
+                logger.debug(f"Bỏ qua OpenRouter model '{model_name}' (Đã vào Blacklist do lỗi 404/decommissioned).")
+                continue
 
-    raise RuntimeError(f"Tất cả {len(keys)} OpenRouter API Key đều thất bại: {last_exc}")
+            # Exponential backoff retry loop cho Server Busy / 5xx / Timeout
+            for attempt in range(1, 4):
+                try:
+                    logger.debug(f"Đang thử OpenRouter API key {idx}/{len(keys)} với model '{model_name}' (Lần {attempt})...")
+                    data = {
+                        "model": model_name,
+                        "messages": [{"role": "user", "content": prompt}],
+                        "temperature": 0.7,
+                        "max_tokens": 2048,
+                    }
+                    req = urllib.request.Request(url, data=json.dumps(data).encode("utf-8"), headers=headers)
+                    with urllib.request.urlopen(req, timeout=60) as resp:
+                        res_data = json.loads(resp.read().decode("utf-8"))
+                        content = res_data["choices"][0]["message"]["content"]
+                        if content and content.strip():
+                            return content
+                except Exception as e:
+                    err_detail = _extract_http_error_detail(e).lower()
+                    last_exc = e
+
+                    # 404 / Decommissioned -> Bỏ MODEL
+                    if "404" in err_detail or "not found" in err_detail or "decommissioned" in err_detail:
+                        _DISABLED_MODELS.add(model_name)
+                        logger.warning(f"🚫 OpenRouter Model '{model_name}' bị 404/Decommissioned -> Bỏ MODEL toàn session.")
+                        break
+
+                    # 401 / 403 -> Bỏ KEY
+                    elif isinstance(e, urllib.error.HTTPError) and e.code in (401, 403):
+                        _DISABLED_KEYS.add(key)
+                        logger.warning(f"🚫 OpenRouter API Key {idx}/{len(keys)} không hợp lệ (HTTP {e.code}) -> Bỏ KEY toàn session.")
+                        key_exhausted = True
+                        break
+
+                    # 429 Quota -> Đổi KEY
+                    elif "quota" in err_detail or "resource_exhausted" in err_detail:
+                        logger.warning(f"⚠️ OpenRouter API Key {idx}/{len(keys)} hết Quota -> Đổi KEY tiếp theo.")
+                        key_exhausted = True
+                        break
+
+                    # 429 Server Busy -> Retry backoff, sau 3 lần đổi MODEL
+                    elif "429" in err_detail or "server busy" in err_detail or "rate limit" in err_detail:
+                        if attempt < 3:
+                            sleep_s = attempt * 2
+                            logger.warning(f"⏳ OpenRouter Server Busy (429). Retry sau {sleep_s}s (Lần {attempt}/3)...")
+                            time.sleep(sleep_s)
+                        else:
+                            logger.warning(f"⚠️ OpenRouter Model '{model_name}' vẫn Busy sau 3 lần retry -> Chuyển MODEL.")
+                            break
+
+                    # 5xx / Timeout -> Retry
+                    elif any(c in err_detail for c in ["500", "502", "503", "504", "timeout"]):
+                        if attempt < 3:
+                            time.sleep(1.5)
+                        else:
+                            break
+                    else:
+                        break
+
+    raise RuntimeError(f"Tất cả OpenRouter API Keys/Models khả dụng đều thất bại: {last_exc}")
 
 
 def _call_groq_api(prompt: str, groq_api_key: str) -> str:
@@ -700,39 +767,78 @@ def _call_groq_api(prompt: str, groq_api_key: str) -> str:
         raise ValueError("Danh sách Groq API Key rỗng!")
 
     models_to_try = [
-        "llama-3.3-70b-versatile",
-        "llama-3.1-8b-instant",
-        "mixtral-8x7b-32768",
+        "groq/compound",
+        "openai/gpt-oss-120b",
+        "openai/gpt-oss-20b",
+        "qwen/qwen3.6-27b",
     ]
 
     last_exc = None
     for idx, key in enumerate(keys, 1):
+        if key in _DISABLED_KEYS:
+            logger.debug(f"Bỏ qua Groq API key {idx}/{len(keys)} (Đã bị vô hiệu hóa do lỗi 401/403).")
+            continue
+
         headers = {
             "Authorization": f"Bearer {key}",
             "Content-Type": "application/json",
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
         }
+        key_exhausted = False
         for model_name in models_to_try:
-            try:
-                logger.debug(f"Đang thử Groq API key {idx}/{len(keys)} ({model_name})...")
-                data = {
-                    "model": model_name,
-                    "messages": [{"role": "user", "content": prompt}],
-                    "temperature": 0.7,
-                    "max_tokens": 2048,
-                }
-                req = urllib.request.Request(url, data=json.dumps(data).encode("utf-8"), headers=headers)
-                with urllib.request.urlopen(req, timeout=60) as resp:
-                    res_data = json.loads(resp.read().decode("utf-8"))
-                    content = res_data["choices"][0]["message"]["content"]
-                    if content and content.strip():
-                        return content
-            except Exception as e:
-                err_str = str(e)
-                logger.warning(f"Groq API key {idx}/{len(keys)} ({model_name}) thất bại: {e}")
-                last_exc = e
-                if "429" in err_str:
-                    time.sleep(2.0)
+            if key_exhausted:
+                break
+            if model_name in _DISABLED_MODELS:
+                logger.debug(f"Bỏ qua Groq model '{model_name}' (Blacklist 404).")
+                continue
+
+            for attempt in range(1, 4):
+                try:
+                    logger.debug(f"Đang thử Groq API key {idx}/{len(keys)} ({model_name}) (Lần {attempt})...")
+                    data = {
+                        "model": model_name,
+                        "messages": [{"role": "user", "content": prompt}],
+                        "temperature": 0.7,
+                        "max_tokens": 2048,
+                    }
+                    req = urllib.request.Request(url, data=json.dumps(data).encode("utf-8"), headers=headers)
+                    with urllib.request.urlopen(req, timeout=60) as resp:
+                        res_data = json.loads(resp.read().decode("utf-8"))
+                        content = res_data["choices"][0]["message"]["content"]
+                        if content and content.strip():
+                            return content
+                except Exception as e:
+                    err_detail = _extract_http_error_detail(e).lower()
+                    last_exc = e
+
+                    if "404" in err_detail or "not found" in err_detail or "decommissioned" in err_detail:
+                        _DISABLED_MODELS.add(model_name)
+                        logger.warning(f"🚫 Groq Model '{model_name}' bị 404/Decommissioned -> Bỏ MODEL toàn session.")
+                        break
+                    elif isinstance(e, urllib.error.HTTPError) and e.code in (401, 403):
+                        _DISABLED_KEYS.add(key)
+                        logger.warning(f"🚫 Groq API key {idx}/{len(keys)} không hợp lệ (HTTP {e.code}) -> Bỏ KEY toàn session.")
+                        key_exhausted = True
+                        break
+                    elif "quota" in err_detail or "resource_exhausted" in err_detail:
+                        logger.warning(f"⚠️ Groq API key {idx}/{len(keys)} hết Quota -> Đổi KEY tiếp theo.")
+                        key_exhausted = True
+                        break
+                    elif "429" in err_detail or "server busy" in err_detail or "rate limit" in err_detail:
+                        if attempt < 3:
+                            sleep_s = attempt * 2
+                            logger.warning(f"⏳ Groq Server Busy (429). Retry sau {sleep_s}s (Lần {attempt}/3)...")
+                            time.sleep(sleep_s)
+                        else:
+                            logger.warning(f"⚠️ Groq Model '{model_name}' vẫn Busy -> Chuyển MODEL.")
+                            break
+                    elif any(c in err_detail for c in ["500", "502", "503", "504", "timeout"]):
+                        if attempt < 3:
+                            time.sleep(1.5)
+                        else:
+                            break
+                    else:
+                        break
 
     # Nếu tất cả Groq keys thất bại, tự động chuyển sang OpenRouter
     openrouter_key = os.getenv("OPENROUTER_API_KEY", "").strip()
@@ -740,7 +846,7 @@ def _call_groq_api(prompt: str, groq_api_key: str) -> str:
         logger.info("Tất cả Groq keys đã hết/lỗi. Chuyển sang dự phòng OpenRouter API...")
         return _call_openrouter_api(prompt, openrouter_key)
 
-    raise RuntimeError(f"Tất cả {len(keys)} Groq API Key đều thất bại: {last_exc}")
+    raise RuntimeError(f"Tất cả Groq API Key khả dụng đều thất bại: {last_exc}")
 
 
 def _call_sambanova_api(prompt: str, sambanova_api_key: str) -> str:
@@ -751,36 +857,76 @@ def _call_sambanova_api(prompt: str, sambanova_api_key: str) -> str:
         raise ValueError("Danh sách SambaNova API Key rỗng!")
 
     models_to_try = [
+        "gemma-4-31B-it",
+        "DeepSeek-V3.2",
         "Meta-Llama-3.3-70B-Instruct",
-        "Qwen2.5-72B-Instruct",
+        "gpt-oss-120b",
     ]
     last_exc = None
     for idx, key in enumerate(keys, 1):
+        if key in _DISABLED_KEYS:
+            logger.debug(f"Bỏ qua SambaNova API key {idx}/{len(keys)} (Đã vô hiệu hóa 401/403).")
+            continue
+
         headers = {
             "Authorization": f"Bearer {key}",
             "Content-Type": "application/json",
         }
+        key_exhausted = False
         for model_name in models_to_try:
-            try:
-                logger.debug(f"Đang thử SambaNova API key {idx}/{len(keys)} với model '{model_name}'...")
-                data = {
-                    "model": model_name,
-                    "messages": [{"role": "user", "content": prompt}],
-                    "temperature": 0.7,
-                    "max_tokens": 2048,
-                }
-                req = urllib.request.Request(url, data=json.dumps(data).encode("utf-8"), headers=headers)
-                with urllib.request.urlopen(req, timeout=60) as resp:
-                    res_data = json.loads(resp.read().decode("utf-8"))
-                    content = res_data["choices"][0]["message"]["content"]
-                    if content and content.strip():
-                        return content
-            except Exception as e:
-                err_str = str(e)
-                logger.warning(f"SambaNova API key {idx}/{len(keys)} model '{model_name}' thất bại: {e}")
-                last_exc = e
-                if "429" in err_str:
-                    time.sleep(2.0)
+            if key_exhausted:
+                break
+            if model_name in _DISABLED_MODELS:
+                logger.debug(f"Bỏ qua SambaNova model '{model_name}' (Blacklist 404).")
+                continue
+
+            for attempt in range(1, 4):
+                try:
+                    logger.debug(f"Đang thử SambaNova API key {idx}/{len(keys)} với model '{model_name}' (Lần {attempt})...")
+                    data = {
+                        "model": model_name,
+                        "messages": [{"role": "user", "content": prompt}],
+                        "temperature": 0.7,
+                        "max_tokens": 2048,
+                    }
+                    req = urllib.request.Request(url, data=json.dumps(data).encode("utf-8"), headers=headers)
+                    with urllib.request.urlopen(req, timeout=60) as resp:
+                        res_data = json.loads(resp.read().decode("utf-8"))
+                        content = res_data["choices"][0]["message"]["content"]
+                        if content and content.strip():
+                            return content
+                except Exception as e:
+                    err_detail = _extract_http_error_detail(e).lower()
+                    last_exc = e
+
+                    if "404" in err_detail or "not found" in err_detail or "decommissioned" in err_detail:
+                        _DISABLED_MODELS.add(model_name)
+                        logger.warning(f"🚫 SambaNova Model '{model_name}' bị 404/Decommissioned -> Bỏ MODEL toàn session.")
+                        break
+                    elif isinstance(e, urllib.error.HTTPError) and e.code in (401, 403):
+                        _DISABLED_KEYS.add(key)
+                        logger.warning(f"🚫 SambaNova API key {idx}/{len(keys)} không hợp lệ (HTTP {e.code}) -> Bỏ KEY toàn session.")
+                        key_exhausted = True
+                        break
+                    elif "quota" in err_detail or "resource_exhausted" in err_detail:
+                        logger.warning(f"⚠️ SambaNova API key {idx}/{len(keys)} hết Quota -> Đổi KEY tiếp theo.")
+                        key_exhausted = True
+                        break
+                    elif "429" in err_detail or "server busy" in err_detail or "rate limit" in err_detail:
+                        if attempt < 3:
+                            sleep_s = attempt * 2
+                            logger.warning(f"⏳ SambaNova Server Busy (429). Retry sau {sleep_s}s (Lần {attempt}/3)...")
+                            time.sleep(sleep_s)
+                        else:
+                            logger.warning(f"⚠️ SambaNova Model '{model_name}' vẫn Busy -> Chuyển MODEL.")
+                            break
+                    elif any(c in err_detail for c in ["500", "502", "503", "504", "timeout"]):
+                        if attempt < 3:
+                            time.sleep(1.5)
+                        else:
+                            break
+                    else:
+                        break
 
     # Nếu tất cả SambaNova keys thất bại, chuyển sang Groq API
     groq_key = os.getenv("GROQ_API_KEY", "").strip()
@@ -788,7 +934,7 @@ def _call_sambanova_api(prompt: str, sambanova_api_key: str) -> str:
         logger.info("Tất cả SambaNova keys đã hết/lỗi. Chuyển sang dự phòng Groq API...")
         return _call_groq_api(prompt, groq_key)
 
-    raise RuntimeError(f"Tất cả {len(keys)} SambaNova API Key đều thất bại: {last_exc}")
+    raise RuntimeError(f"Tất cả SambaNova API Key khả dụng đều thất bại: {last_exc}")
 
 
 def _call_gemini_api(prompt: str, api_key: str) -> str:
@@ -816,54 +962,90 @@ def _call_gemini_api(prompt: str, api_key: str) -> str:
         raise ValueError("Danh sách API Key rỗng!")
 
     models_to_try = [
-        "gemini-2.0-flash",
-        "gemini-2.0-flash-lite",
-        "gemini-1.5-flash",
-        "gemini-1.5-pro",
+        "gemini-3.6-flash",
+        "gemini-flash-latest",
+        "gemini-3.5-flash-lite",
+        "gemini-pro-latest",
     ]
     last_exc = None
 
     for key_idx, key in enumerate(keys, 1):
+        if key in _DISABLED_KEYS:
+            logger.debug(f"Bỏ qua Gemini API Key #{key_idx} (Đã vào Blacklist Key lỗi 401/403).")
+            continue
+
         genai.configure(api_key=key)
         key_exhausted = False
         for model_name in models_to_try:
             if key_exhausted:
                 break
-            try:
-                logger.debug(f"Đang thử Gemini key {key_idx}/{len(keys)} với model '{model_name}'...")
-                model = genai.GenerativeModel(model_name)
+            if model_name in _DISABLED_MODELS:
+                logger.debug(f"Bỏ qua Gemini Model '{model_name}' (Đã vào Blacklist Model 404/decommissioned).")
+                continue
 
-                config = genai.GenerationConfig(
-                    temperature=0.7,
-                    max_output_tokens=2048,
-                )
+            for attempt in range(1, 4):
+                try:
+                    logger.debug(f"Đang thử Gemini key {key_idx}/{len(keys)} với model '{model_name}' (Lần {attempt})...")
+                    model = genai.GenerativeModel(model_name)
 
-                response = model.generate_content(
-                    prompt,
-                    generation_config=config,
-                )
-                if response.text and response.text.strip():
-                    return response.text
-
-            except Exception as e:
-                err_str = str(e)
-                last_exc = e
-
-                if "404" in err_str:
-                    logger.debug(f"Model {model_name} không khả dụng cho key {key_idx}, thử model tiếp...")
-                    continue
-                elif "429" in err_str or "quota" in err_str.lower():
-                    logger.warning(
-                        f"Key {key_idx}/{len(keys)} ({model_name}) dính lỗi 429 (Rate limit / Quota). Chuyển ngay sang Key tiếp theo..."
+                    config = genai.GenerationConfig(
+                        temperature=0.7,
+                        max_output_tokens=2048,
                     )
-                    key_exhausted = True
-                    break
-                else:
-                    logger.warning(f"Key {key_idx}/{len(keys)} ({model_name}) gặp lỗi: {e}")
+
+                    response = model.generate_content(
+                        prompt,
+                        generation_config=config,
+                    )
+                    if response.text and response.text.strip():
+                        return response.text
+
+                except Exception as e:
+                    err_str = str(e).lower()
+                    last_exc = e
+
+                    # 404 / Decommissioned -> Bỏ MODEL
+                    if "404" in err_str or "not found" in err_str or "decommissioned" in err_str:
+                        _DISABLED_MODELS.add(model_name)
+                        logger.warning(f"🚫 Gemini Model '{model_name}' bị 404/Decommissioned -> Bỏ MODEL toàn session.")
+                        break
+
+                    # 401 / 403 -> Bỏ KEY
+                    elif any(c in err_str for c in ["401", "403", "unauthorized", "api_key_invalid", "permission_denied"]):
+                        _DISABLED_KEYS.add(key)
+                        logger.warning(f"🚫 Gemini API Key #{key_idx} không hợp lệ (HTTP 401/403) -> Bỏ KEY toàn session.")
+                        key_exhausted = True
+                        break
+
+                    # 429 Server Busy -> Retry exponential backoff
+                    elif "server busy" in err_str or ("429" in err_str and "quota" not in err_str and "resource_exhausted" not in err_str):
+                        if attempt < 3:
+                            sleep_s = attempt * 2
+                            logger.warning(f"⏳ Gemini Server Busy (429). Retry sau {sleep_s}s (Lần {attempt}/3)...")
+                            time.sleep(sleep_s)
+                        else:
+                            logger.warning(f"⚠️ Gemini Model '{model_name}' vẫn Busy -> Chuyển MODEL.")
+                            break
+
+                    # 429 Quota -> Đổi KEY
+                    elif "429" in err_str or "quota" in err_str or "resource_exhausted" in err_str:
+                        logger.warning(f"⚠️ Gemini Key #{key_idx}/{len(keys)} ({model_name}) hết Quota (429) -> Đổi KEY tiếp theo.")
+                        key_exhausted = True
+                        break
+
+                    # 5xx / Timeout -> Retry
+                    elif any(c in err_str for c in ["500", "502", "503", "504", "timeout"]):
+                        if attempt < 3:
+                            time.sleep(1.5)
+                        else:
+                            break
+                    else:
+                        logger.warning(f"Key #{key_idx} ({model_name}) gặp lỗi khác: {e}")
+                        break
 
     # 1. Dự phòng Tầng 2: SambaNova API (Siêu tốc 100% Free)
     if sambanova_key:
-        logger.info("Tất cả Gemini keys đã hết quota. Chuyển sang dự phòng Tầng 2: SambaNova API...")
+        logger.info("Tất cả Gemini keys đã hết quota/lỗi. Chuyển sang dự phòng Tầng 2: SambaNova API...")
         try:
             return _call_sambanova_api(prompt, sambanova_key)
         except Exception as e:
@@ -1203,5 +1385,68 @@ def _convert_raw_segments(
                 start_timecode=f"{int(st//60):02d}:{int(st%60):02d}",
                 end_timecode=f"{int(et//60):02d}:{int(et%60):02d}",
             ))
+
+    # KÍCH HOẠT BATCH CAPTION REPAIR (1 API Request duy nhất sửa đồng loạt cả 4 caption nếu có lỗi)
+    if api_key and segments:
+        segments = _repair_caption_batch(segments, api_key)
+
+    return segments
+
+
+def _repair_caption_batch(segments: List[ViralSegment], api_key: str) -> List[ViralSegment]:
+    """Kiểm tra và sửa lại đồng loạt tất cả caption chưa đạt chuẩn 8-10 từ Tiếng Anh trong 1 API Request duy nhất."""
+    invalid_segs = []
+    for seg in segments:
+        w_count = count_title_words(seg.title_en)
+        has_vi = any(c in seg.title_en.lower() for c in "àáảãạăằắẳẵặâầấẩẫậèéẻẽẹêềếểễệìíỉĩịòóỏõọôồốổỗộơờớởỡợùúủũụưừứửữựỳýỷỹỵđ")
+        if w_count < 8 or w_count > 10 or has_vi:
+            invalid_segs.append(seg)
+
+    if not invalid_segs:
+        return segments
+
+    logger.warning(
+        f"⚠️ Phát hiện {len(invalid_segs)}/{len(segments)} caption chưa đạt chuẩn (8-10 từ Tiếng Anh). "
+        f"Đang gửi 1 Batch API Request sửa đồng loạt cả 4 caption..."
+    )
+
+    caption_lines = [f"Clip {s.index}: {s.title_en}" for s in segments]
+    prompt = (
+        f"You are an expert tabloid headline editor.\n"
+        f"The following clip headlines failed strict length or language requirements.\n\n"
+        f"CURRENT HEADLINES:\n" + "\n".join(caption_lines) + "\n\n"
+        f"TASK:\n"
+        f"Rewrite ALL {len(segments)} headlines into high-converting Tabloid Headlines STRICTLY IN ENGLISH.\n\n"
+        f"STRICT RULES:\n"
+        f"1. WORD COUNT: EVERY headline MUST have STRICTLY between 8 and 10 English words (8 <= word_count <= 10). Count words carefully!\n"
+        f"2. LANGUAGE: 100% English. NO Vietnamese characters allowed.\n"
+        f"3. EMOJI: End each headline with 1 relevant expressive emoji (💥, 🔥, ⚡, 📍, 💰, 🚀, 😳, 😱, 🤫).\n"
+        f"4. NO DUMMY FILLER WORDS: Do NOT append dummy suffixes like 'REVEALED NOW', 'EXPOSED TRUTH', 'TODAY'. Write natural coherent sentences.\n\n"
+        f"JSON OUTPUT FORMAT REQUIRED:\n"
+        f'{{"segments": [{{"index": 1, "title_en": "Shocking Headline Here Between Eight And Ten Words 💥"}}, ...]}}'
+    )
+
+    try:
+        with _LLM_LOCK:
+            response_text = _call_gemini_api(prompt, api_key)
+        
+        json_match = re.search(r"\{.*\}", response_text, re.DOTALL)
+        if json_match:
+            data = json.loads(json_match.group(0))
+            repaired_items = data.get("segments", [])
+            for item in repaired_items:
+                idx = item.get("index")
+                new_t = item.get("title_en", item.get("title", ""))
+                if idx is not None and new_t:
+                    for seg in segments:
+                        if seg.index == idx:
+                            from ..utils.graphic_subtitle import clean_caption_text
+                            clean_t = clean_caption_text(new_t)
+                            if 8 <= count_title_words(clean_t) <= 10:
+                                seg.title_en = clean_t
+                                seg.title_vi = clean_t
+                                logger.info(f"✅ Batch Repair thành công Clip {seg.index}: '{seg.title_en}' ({count_title_words(seg.title_en)} từ)")
+    except Exception as e:
+        logger.warning(f"Batch repair caption thất bại: {e}")
 
     return segments

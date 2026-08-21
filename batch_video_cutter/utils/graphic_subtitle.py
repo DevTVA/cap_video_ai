@@ -972,7 +972,7 @@ def generate_top_caption_layer(
     # Cho cả Canvas 1:1 (Style 3) và Canvas 3:4 (Style 4 & 5), dùng 7-8 từ để hiển thị chuẩn 2 dòng cân đối
     words = ensure_caption_8_to_10_words(title_text, fallback_text, target_min=7, target_max=8)
 
-    # Sử dụng font Montserrat-Bold.ttf
+    # Sử dụng font Montserrat-Bold.ttf cho cả Style 3, Style 5 và Style 4
     montserrat_path = Path(__file__).parent.parent / "assets" / "fonts" / "Montserrat-Bold.ttf"
     if montserrat_path.exists():
         font_path = str(montserrat_path)
@@ -1030,7 +1030,7 @@ def generate_top_caption_layer(
     draw = ImageDraw.Draw(img)
 
     # 1. Phong cách 3 (Canvas 1:1 1080x1080): Render Dải Nền Vàng + Chữ Đen Montserrat-Bold Cân Đối
-    if canvas_size[0] == 1080 and canvas_size[1] == 1080:
+    if style_index == 3:
         draw.rectangle([0, 0, canvas_size[0], top_area_height], fill=(255, 255, 0, 255))
 
         try:
@@ -1055,33 +1055,32 @@ def generate_top_caption_layer(
 
         logger.info(f"Đã tạo PNG Top Caption Dải Nền Vàng Chữ Đen Montserrat-Bold ({len(lines)} Dòng - Style 3): {output_png}")
 
-    # 2. Phong cách 5: Canvas 3:4 với Dải Nền Xanh Dương (RGB 85, 118, 251) + Chữ Trắng In Hoa Montserrat-Bold (Chuẩn phong cách 5.mp4)
+    # 2. Phong cách 5: Render Dải Nền Xanh Dương (#5576FB) + Chữ TRẮNG Montserrat-Bold Cân Đối (Chuẩn thuật toán Style 3)
     elif style_index == 5:
-        # Draw top blue banner (solid fill #5576FB)
+        # Draw top blue banner (solid fill #5576FB / RGB 85, 118, 251)
         draw.rectangle([0, 0, canvas_size[0], top_area_height], fill=(85, 118, 251, 255))
 
-        clean_lines = [l.replace('"', '').strip() for l in lines]
         try:
             ascent, descent = font.getmetrics()
             line_h = ascent + descent
         except Exception:
             line_h = 42
 
-        bboxes = [font.getbbox(l) for l in clean_lines]
+        bboxes = [font.getbbox(l) for l in lines]
         widths = [b[2] - b[0] for b in bboxes]
 
         line_gap = 10
-        total_h = len(clean_lines) * line_h + line_gap * (len(clean_lines) - 1)
+        total_h = len(lines) * line_h + line_gap * (len(lines) - 1)
         start_y = max(10, (top_area_height - total_h) // 2)
 
         curr_y = start_y
-        for i, line_str in enumerate(clean_lines):
+        for i, line_str in enumerate(lines):
             w = widths[i]
             x_pos = (canvas_size[0] - w) // 2
             draw.text((x_pos, curr_y), line_str, font=font, fill=(255, 255, 255, 255))
             curr_y += line_h + line_gap
 
-        logger.info(f"Đã tạo PNG Top Caption Dải Nền Xanh Chữ Trắng Montserrat-Bold ({len(clean_lines)} Dòng - Style 5): {output_png}")
+        logger.info(f"Đã tạo PNG Top Caption Dải Nền Xanh Chữ Trắng Montserrat-Bold ({len(lines)} Dòng - Style 5): {output_png}")
 
     # 3. Phong cách 4: Canvas 3:4 (1080x1440) White Rounded Badge cân đối uốn lượn
     else:

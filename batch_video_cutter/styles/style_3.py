@@ -12,6 +12,7 @@ class Style3(BaseStyle):
     """Phong cách 3: Canvas 1:1 Dải Nền Vàng Tiêu Đề Chữ Đen Trong Ngoặc Kép + Highlight Màu Đỏ (Chuẩn phong cách 3.mp4)."""
 
     CAPTION_HEIGHT_RATIO = 0.1667  # 180px / 1080px
+    style_index: int = 3
 
     @property
     def name(self) -> str:
@@ -61,6 +62,7 @@ class Style3(BaseStyle):
             fg_h = video_area_h
             fg_w = int(input_width * (fg_h / input_height))
 
+        # Căn giữa khung hình hiển thị (100% chuẩn, không bị lệch/đẩy sang trái)
         crop_x = (fg_w - out_w) // 2
         crop_y = (fg_h - video_area_h) // 2
 
@@ -82,8 +84,8 @@ class Style3(BaseStyle):
         return "bottom"
 
     def get_highlight_color(self) -> str:
-        """Màu Highlight MÀU XANH LÁ ("green")."""
-        return "green"
+        """Màu Highlight MÀU ĐỎ ("red")."""
+        return "red"
 
     def get_font_size(self) -> int:
         """Cỡ font 66pt bằng tỉ lệ cỡ chữ Outcard."""
@@ -93,6 +95,5 @@ class Style3(BaseStyle):
         return False
 
     def get_max_clips(self) -> Optional[int]:
-        """Phong cách 3 cắt 4 đoạn viral."""
-        return 4
-
+        """Phong cách 3 cắt 3 đoạn viral."""
+        return 3

@@ -4,6 +4,7 @@ Quét đệ quy folder nguồn → tìm tất cả file .mp4.
 Cấu trúc folder: {folder_name}/{date}/{video_id}/*.mp4
 """
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional
@@ -30,8 +31,9 @@ class VideoInfo:
 def _extract_folder_index(folder_name: str) -> int:
     """Trích xuất số thứ tự từ tên folder.
 
-    Thử parse số từ tên folder. Nếu không phải số,
-    dùng hash để tạo index duy nhất.
+    Thử parse số từ tên folder. Nếu không phải số thuần,
+    dùng regex trích xuất số đầu tiên tìm thấy (ví dụ: 'folder_12' -> 12).
+    Nếu không có số nào, mới dùng hash để tạo index duy nhất.
 
     Args:
         folder_name: Tên folder gốc.
@@ -42,7 +44,9 @@ def _extract_folder_index(folder_name: str) -> int:
     try:
         return int(folder_name)
     except ValueError:
-        # Nếu folder name không phải số, dùng hash
+        match = re.search(r"\d+", folder_name)
+        if match:
+            return int(match.group())
         return abs(hash(folder_name)) % 10000
 
 

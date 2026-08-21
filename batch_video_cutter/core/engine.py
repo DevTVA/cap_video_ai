@@ -240,9 +240,9 @@ def cut_and_render_clip(
         _, stderr_output = process.communicate()
 
         if process.returncode != 0:
-            # Nếu dùng GPU mà lỗi → thử fallback 1 lần về software CPU (libx264)
+            # Nếu dùng GPU mà lỗi → thử lại riêng clip này bằng CPU libx264 (không khóa GPU của các clip khác)
             if enable_gpu and encoder_name != "libx264":
-                logger.warning(f"FFmpeg GPU render thất bại ({encoder_name}), đang tự động thử lại bằng CPU libx264...")
+                logger.warning(f"⚠️ FFmpeg GPU render thất bại ({encoder_name}) cho clip {output_path.name}. Đang thử lại riêng clip này bằng CPU (libx264)...")
                 return cut_and_render_clip(
                     video_path=video_path,
                     start_time=start_time,

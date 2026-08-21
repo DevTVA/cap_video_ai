@@ -62,12 +62,50 @@ class TranscriptResult:
 _MODEL_CACHE = {}
 
 
+def _setup_nvidia_dlls():
+    """Tự động thêm thư mục DLL nvidia trong site-packages vào Windows PATH & DLL directory."""
+    import os
+    user_site = Path(os.path.expanduser("~")) / "AppData/Roaming/Python"
+    for p in user_site.glob("**/site-packages/nvidia/*/bin"):
+        if p.exists():
+            try:
+                os.add_dll_directory(str(p.resolve()))
+            except Exception:
+                pass
+            os.environ["PATH"] = str(p.resolve()) + os.path.pathsep + os.environ.get("PATH", "")
+
+
+def detect_whisper_device_and_compute_type(requested_device: str = "auto", requested_compute: str = "auto") -> tuple[str, str]:
+    """Tự động phát hiện và chọn device ('cuda' hoặc 'cpu') cùng compute_type phù hợp nhất."""
+    _setup_nvidia_dlls()
+
+    if requested_device == "cpu":
+        compute = "int8" if requested_compute == "auto" else requested_compute
+        return "cpu", compute
+
+    try:
+        import ctranslate2
+        if ctranslate2.get_cuda_device_count() > 0:
+            dev = "cuda"
+            compute = "float16" if requested_compute == "auto" else requested_compute
+            logger.info(f"⚡ Tự động phát hiện GPU NVIDIA — Chọn Whisper device: {dev} ({compute})")
+            return dev, compute
+    except Exception as e:
+        logger.debug(f"Không thể kiểm tra CUDA ctranslate2: {e}")
+
+    compute = "int8" if requested_compute == "auto" else requested_compute
+    return "cpu", compute
+
+
 def get_whisper_model(
     model_name: str = "base.en",
-    device: str = "cpu",
-    compute_type: str = "int8",
+    device: str = "auto",
+    compute_type: str = "auto",
 ):
-    """Lấy hoặc khởi tạo instance WhisperModel từ cache."""
+    """Lấy hoặc khởi tạo instance WhisperModel từ cache (hỗ trợ tự động phát hiện CUDA)."""
+    if device == "auto" or compute_type == "auto":
+        device, compute_type = detect_whisper_device_and_compute_type(device, compute_type)
+
     key = (model_name, device, compute_type)
     if key not in _MODEL_CACHE:
         try:
@@ -76,19 +114,35 @@ def get_whisper_model(
             raise RuntimeError(
                 "Chưa cài faster-whisper. Chạy: pip install faster-whisper"
             )
-        logger.info(f"Nạp WhisperModel vào bộ nhớ (Singleton Cache): {model_name} | {device} | {compute_type}")
-        _MODEL_CACHE[key] = WhisperModel(
-            model_name,
-            device=device,
-            compute_type=compute_type,
-        )
+        
+        try:
+            logger.info(f"Nạp WhisperModel vào bộ nhớ (Singleton Cache): {model_name} | device={device} | compute={compute_type}")
+            _MODEL_CACHE[key] = WhisperModel(
+                model_name,
+                device=device,
+                compute_type=compute_type,
+            )
+        except Exception as e:
+            if device != "cpu":
+                logger.warning(f"⚠️ Khởi tạo WhisperModel trên {device} thất bại: {e}. Tự động fallback sang CPU int8...")
+                return get_whisper_model(model_name=model_name, device="cpu", compute_type="int8")
+            raise e
+
     return _MODEL_CACHE[key]
 
 
 def cleanup_whisper_model():
-    """Dọn dẹp giải phóng bộ nhớ model Whisper."""
+    """Dọn dẹp giải phóng bộ nhớ model Whisper và VRAM CUDA."""
     global _MODEL_CACHE
     _MODEL_CACHE.clear()
+    import gc
+    gc.collect()
+    try:
+        import torch
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except Exception:
+        pass
 
 
 import re
@@ -201,8 +255,8 @@ def try_parse_existing_subtitles(video_path: Path) -> Optional[TranscriptResult]
 def transcribe_video(
     video_path: Path,
     model_name: str = "base.en",
-    device: str = "cpu",
-    compute_type: str = "int8",
+    device: str = "auto",
+    compute_type: str = "auto",
 ) -> TranscriptResult:
     """Chuyển đổi audio từ video thành text với word-level timestamps.
 

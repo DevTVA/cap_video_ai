@@ -32,8 +32,8 @@ console = Console()
 @click.option(
     "--style-map",
     "-s",
-    default="1-12:1,13-24:2,25-36:4,37-48:3,49-54:5",
-    help="Mapping dải folder -> phong cách. Ví dụ: '1-12:1,13-24:2,25-36:4,37-48:3,49-54:5'",
+    default="1-12:2,13-24:4,25-36:3,37-48:5",
+    help="Mapping dải folder -> phong cách. Ví dụ: '1-12:2,13-24:4,25-36:3,37-48:5'",
 )
 @click.option(
     "--max-clips",

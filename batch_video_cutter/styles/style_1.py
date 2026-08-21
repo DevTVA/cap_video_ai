@@ -11,6 +11,8 @@ from .base import BaseStyle
 class Style1(BaseStyle):
     """Phong cách 1: 1:1 với nền blur và 150% CapCut zoom."""
 
+    style_index: int = 1
+
     @property
     def name(self) -> str:
         return "Style 1 - 1:1 Blur Background (CapCut 150% Zoom)"

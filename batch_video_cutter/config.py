@@ -19,8 +19,8 @@ class AppConfig:
 
     input_dir: Path = field(default_factory=lambda: DEFAULT_INPUT_DIR)
     output_dir: Path = field(default_factory=lambda: DEFAULT_OUTPUT_DIR)
-    style_mapping_str: str = "1-12:1,13-24:2,25-36:4,37-48:3,49-54:5"
-    max_clips_per_video: int = 3
+    style_mapping_str: str = "1-12:2,13-24:4,25-36:3,37-48:5"
+    max_clips_per_video: int = 2
     max_workers: int = 2
     whisper_model: str = "base.en"
     gemini_api_key: str = field(default_factory=lambda: os.getenv("GEMINI_API_KEY", ""))
@@ -28,7 +28,7 @@ class AppConfig:
     session_folder_name: Optional[str] = None
     use_gpu: bool = True
     ffmpeg_preset: str = "superfast"
-    max_render_workers: int = 4
+    max_render_workers: int = 2
     force_rerender: bool = False
 
     def __post_init__(self):
