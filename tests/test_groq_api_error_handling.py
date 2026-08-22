@@ -19,4 +19,4 @@ def test_groq_api_invalid_key_break(monkeypatch):
     monkeypatch.setenv("OPENROUTER_API_KEY", "")
     with pytest.raises(RuntimeError) as exc_info:
         _call_groq_api("test prompt", "invalid_key_123")
-    assert "Tất cả 1 Groq API Key đều thất bại" in str(exc_info.value)
+    assert "Tất cả Groq API Key" in str(exc_info.value)

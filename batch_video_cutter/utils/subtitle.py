@@ -166,9 +166,14 @@ def extract_emoji_for_phrase(phrase_text: str, fallback_default: bool = False, r
     elif any(w in text_lower for w in ["không", "chưa", "đừng", "not", "don't", "can't", "won't", "no"]):
         return "⚡"
 
-    # 3. Xuất hiện ngẫu nhiên nếu được bật (random appearance)
-    if fallback_default or (random_prob > 0 and random.random() < random_prob):
-        return random.choice(POPULAR_RANDOM_EMOJIS)
+    # 3. Xuất hiện ngẫu nhiên theo Deterministic Hash (giúp output trùng khớp 100% giữa các lần re-run)
+    if fallback_default or random_prob > 0:
+        import hashlib
+        h = int(hashlib.md5(phrase_text.encode("utf-8")).hexdigest(), 16)
+        rnd_val = (h % 1000) / 1000.0
+        if fallback_default or rnd_val < random_prob:
+            idx = h % len(POPULAR_RANDOM_EMOJIS)
+            return POPULAR_RANDOM_EMOJIS[idx]
 
     return None
 

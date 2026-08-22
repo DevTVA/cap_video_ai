@@ -18,6 +18,8 @@ from typing import List, Optional
 
 from loguru import logger
 
+ANALYZER_VERSION = "2.0"
+
 # Threading lock để ngăn các luồng cắt video đồng thời gửi API cùng lúc gây lỗi Rate Limit 429
 _LLM_LOCK = threading.Lock()
 
@@ -30,8 +32,8 @@ _DISABLED_MODELS: set[str] = set()
 
 
 def _get_cache_key(transcript_text: str, max_clips: int, prompt_template: Optional[str] = None) -> str:
-    """Tạo mã SHA-256 duy nhất đại diện cho request."""
-    data = f"{transcript_text.strip()}_{max_clips}_{prompt_template or ''}".encode("utf-8")
+    """Tạo mã SHA-256 duy nhất đại diện cho request (bao gồm ANALYZER_VERSION)."""
+    data = f"{ANALYZER_VERSION}_{transcript_text.strip()}_{max_clips}_{prompt_template or ''}".encode("utf-8")
     return hashlib.sha256(data).hexdigest()
 
 
@@ -43,11 +45,12 @@ def _read_cache(cache_key: str) -> Optional[List["ViralSegment"]]:
             with open(cache_file, "r", encoding="utf-8") as f:
                 data = json.load(f)
             from ..utils.graphic_subtitle import clean_caption_text, clean_caption_text_for_frame
+            from ..config import TITLE_MIN_WORDS, TITLE_MAX_WORDS
             segments = []
             for item in data:
                 clean_en = clean_caption_text(item["title_en"])
                 words = clean_caption_text_for_frame(clean_en).split()
-                if len(words) < 7 or len(words) > 12:
+                if len(words) < TITLE_MIN_WORDS or len(words) > TITLE_MAX_WORDS:
                     raw_dummy = [{"start": item.get("start_timecode", "0:00"), "end": item.get("end_timecode", "0:27"), "title_en": clean_en, "title_vi": item.get("title_vi", "")}]
                     refreshed = _convert_raw_segments(raw_dummy, max_clips=1, video_duration=0.0)
                     if refreshed:
@@ -120,7 +123,7 @@ class ViralSegment:
         return self.end_time - self.start_time
 
 
-# Prompt mặc định chuẩn Facebook Reels Tabloid 8-12 từ Tiếng Anh + Emoji
+# Prompt mặc định chuẩn Facebook Reels Tabloid 8-10 từ Tiếng Anh + Emoji
 DEFAULT_PROMPT_TEMPLATE = """You are an expert viral content editor specializing in Facebook Reels, TikTok & Shorts headlines.
 
 TASKS:
@@ -129,7 +132,7 @@ TASKS:
 3. Generate a high-converting Tabloid Title / Caption for each clip following these STRICT RULES:
 
 SEGMENT SELECTION & DIALOGUE RULES:
-- STRICT DIALOGUE MANDATE: You MUST ONLY select segments that contain ACTIVE BACK-AND-FORTH DIALOGUE, INTERROGATION, ARGUMENT, OR DIRECT Q&A BETWEEN 2 OR MORE PEOPLE (e.g. Attorney & Witness, Judge & Defendant, Officer & Suspect, Host & Guest).
+- STRICT DIALOGUE MANDATE: You MUST ONLY select segments that contain ACTIVE BACK-AND-FORTH DIALOGUE, INTERROGATION, ARGUMENT, OR DIRECT Q&A BETWEEN 2 OR MORE PEOPLE (e.g. Attorney & Witness, Officer & Suspect, Q&A).
 - STRICTLY FORBID SHOW INTROS, MONOLOGUES & BREAKS: DO NOT select channel introductions, show intros ("welcome to the show", "today's episode", "brought to you by"), station breaks, narrator summaries, voiceover background explanations, single-speaker intros, or host presentations AT ANY TIMESTAMP IN THE VIDEO. Reject any segment where 1 person is giving an intro or welcoming the audience!
 - NON-OVERLAPPING MANDATE: All selected clips MUST be completely distinct with NO time overlap between clips. Clip 2 must start AFTER Clip 1 ends!
 
@@ -148,8 +151,6 @@ Transcript:
 {transcript}"""
 
 
-
-
 DIALOGUE_KEYWORDS = [
     r"\bdid you\b", r"\bwhat did\b", r"\bwhy did\b", r"\bwere you\b", r"\bcould you\b",
     r"\bobjection\b", r"\byour honor\b", r"\byes sir\b", r"\bno ma'am\b", r"\btell the court\b",
@@ -159,38 +160,22 @@ DIALOGUE_KEYWORDS = [
 ]
 
 
-def score_dialogue_quality(text: str) -> float:
-    """Đánh giá điểm đối thoại nhân vật (Dialogue Score):
-    - Tăng điểm dựa trên sự xuất hiện của từ khóa đối chất / hỏi đáp (Q&A).
-    - Tăng điểm dựa trên mật độ dấu hỏi (?) và câu ngắn thể hiện đáp lời nhanh.
-    - Giảm điểm nếu có các cụm từ thuyết minh/giới thiệu kênh (welcome back, subscribe, today we are looking at).
-    """
-    if not text:
-        return 0.0
-
-    score = 1.0
-    text_lower = text.lower()
-
 INTRO_KEYWORDS = [
-    # General channel & video intros
+    # General channel & video intros (CHỈ lọc các cụm intro / promo / branding rõ ràng)
     "welcome back", "subscribe", "today we're", "today we are", "in this video",
-    "thanks for watching", "don't forget to like", "channel", "my name is",
+    "thanks for watching", "don't forget to like", "channel",
     "let's talk about", "let's dive into", "hey guys", "hello everyone",
     # Show intros, station IDs, podcast & sponsor monologues
     "welcome to", "brought to you by", "sponsored by", "today's episode",
-    "today's show", "host", "station break", "stay tuned", "commercial break",
+    "today's show", "station break", "stay tuned", "commercial break",
     "welcome to the show", "welcome to our channel", "in today's show", "before we start",
     "make sure to", "hit that button", "leave a comment", "welcome back to", "this episode is",
     "on today's show", "in this episode", "welcome everyone", "welcome all", "on the show", "today on the show",
-    # TV Show Branding, Host Names, Judge Names, Promo Cards & Bumper Graphics
-    "divorce court", "judge lynn", "judge toler", "lynn toler", "judge lauren", "lauren lake",
-    "we the people", "courtroom", "the honorable", "judge",
-    "facebook.com", "facebook", "tell us what you think", "what do you think", "do you believe",
-    "social media", "comment below", "visit our", "tweet us", "follow us", "hashtag",
-    "call in", "vote now", "opinion", "coming up next", "when we return", "after the break",
-    "show branding", "promo", "music 🎵", "[music]", "(music)", "music", "applause", "[applause]",
-    "(applause)", "cheering", "[cheering]", "theme song", "theme", "intro", "outro", "commercial", "bumper", "station id",
-    # Vietnamese keywords
+    "tell us what you think", "social media", "comment below", "visit our", "tweet us", "follow us",
+    "coming up next", "when we return", "after the break",
+    "show branding", "promo", "[music]", "(music)", "music", "applause", "[applause]",
+    "(applause)", "cheering", "[cheering]", "theme song", "intro", "outro", "commercial", "bumper", "station id",
+    # Vietnamese intro keywords
     "chào mừng", "đăng ký kênh", "tập hôm nay", "xin chào các bạn", "chủ đề hôm nay",
     "cảm ơn đã xem", "đăng ký ngay", "chương trình hôm nay", "chào mừng quay trở lại",
     "xin chào tất cả", "chào mừng các bạn", "kênh của chúng tôi",
@@ -1079,10 +1064,11 @@ def _call_gemini_api(prompt: str, api_key: str) -> str:
 
 
 def count_title_words(title: str) -> int:
-    """Đếm số từ thực tế của tiêu đề sau khi làm sạch rác markdown, nháy, và chú thích ngoặc."""
-    from ..utils.graphic_subtitle import clean_caption_text
+    """Đếm số từ thực tế của tiêu đề sau khi làm sạch rác markdown và bóc tách emoji."""
+    from ..utils.graphic_subtitle import clean_caption_text, clean_caption_text_for_frame
     clean = clean_caption_text(title)
-    words = [w for w in clean.split() if w.strip()]
+    pure_text = clean_caption_text_for_frame(clean)
+    words = [w for w in pure_text.split() if w.strip()]
     return len(words)
 
 

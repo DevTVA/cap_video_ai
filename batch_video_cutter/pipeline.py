@@ -58,6 +58,7 @@ class PipelineOrchestrator:
         # Tự động tìm kiếm file outcard.mp4
         self.outcard_path = None
         outcard_candidates = [
+            config.outcard_path,
             config.input_dir / "outcard.mp4",
             config.input_dir.parent / "outcard.mp4",
             Path(r"E:\cap_video\outcard.mp4"),
@@ -67,11 +68,10 @@ class PipelineOrchestrator:
             Path.cwd() / "outcard.mp4",
         ]
         for p in outcard_candidates:
-            if p.exists():
-                self.outcard_path = p.resolve()
+            if p and Path(p).exists():
+                self.outcard_path = Path(p).resolve()
                 logger.info(f"Đã phát hiện file Outcard: {self.outcard_path}")
                 break
-
 
         self.render_semaphore = asyncio.Semaphore(config.max_render_workers)
         self.state_file = self.bundle_dir / "pipeline_state.json"
@@ -79,12 +79,16 @@ class PipelineOrchestrator:
         if self.saved_results_list:
             self._write_captions_summary(self.saved_results_list)
 
-
     def _load_state(self) -> tuple:
         """Tải trạng thái video đã hoàn thành và kết quả clip để resume."""
+        from .core.analyzer import ANALYZER_VERSION
         if self.state_file.exists():
             try:
                 data = json.loads(self.state_file.read_text(encoding="utf-8"))
+                saved_ver = data.get("analyzer_version", "1.0")
+                if saved_ver != ANALYZER_VERSION:
+                    logger.info(f"Analyzer version đổi ({saved_ver} -> {ANALYZER_VERSION}). Làm mới pipeline state...")
+                    return set(), []
                 completed = set(data.get("completed_videos", []))
                 results = data.get("results_list", [])
                 return completed, results
@@ -94,6 +98,7 @@ class PipelineOrchestrator:
 
     def _save_state(self, video_path: str, new_results: list = None):
         """Lưu trạng thái video hoàn thành và tự động cập nhật ngay file all_clip_titles.txt."""
+        from .core.analyzer import ANALYZER_VERSION
         self.completed_videos.add(video_path)
         if new_results:
             new_filenames = {r["filename"] for r in new_results}
@@ -103,6 +108,7 @@ class PipelineOrchestrator:
         try:
             self.state_file.write_text(
                 json.dumps({
+                    "analyzer_version": ANALYZER_VERSION,
                     "completed_videos": list(self.completed_videos),
                     "results_list": self.saved_results_list,
                 }, indent=2),
