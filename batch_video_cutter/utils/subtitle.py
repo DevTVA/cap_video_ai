@@ -26,6 +26,150 @@ class SubtitleLine:
             self.words = []
 
 
+def estimate_word_timings(
+    text: str,
+    start: float,
+    end: float,
+) -> List[Tuple[str, float, float]]:
+    """Tự động phân bổ thời lượng từ (estimate_word_timings) theo thứ tự ưu tiên:
+    1. Trả về rỗng nếu text rỗng hoặc duration <= 0.
+    2. Char-Weighted Allocation + Punctuation Pause Weight.
+    3. Uniform fallback nếu sum(weights) <= 0.
+    Gắn mốc từ hoàn toàn hợp lệ mà không có overlap hay negative duration.
+    """
+    if not text or not text.strip() or end <= start:
+        return []
+
+    raw_words = text.strip().split()
+    if not raw_words:
+        return []
+
+    total_dur = end - start
+
+    def _calc_word_weight(w: str) -> float:
+        clean_w = re.sub(r"[^\w]", "", w)
+        weight = max(1.0, float(len(clean_w)))
+        if w.endswith((",", ";", ":")):
+            weight += 1.5
+        elif w.endswith((".", "!", "?")):
+            weight += 2.5
+        return weight
+
+    weights = [_calc_word_weight(w) for w in raw_words]
+    total_weight = sum(weights)
+    if total_weight <= 0:
+        total_weight = float(len(raw_words))
+        weights = [1.0] * len(raw_words)
+
+    words = []
+    curr_t = start
+    for i, w in enumerate(raw_words):
+        w_dur = (weights[i] / total_weight) * total_dur
+        w_start = round(curr_t, 4)
+        if i == len(raw_words) - 1:
+            w_end = round(end, 4)
+        else:
+            w_end = round(min(end, curr_t + w_dur), 4)
+
+        if w_end <= w_start:
+            w_end = round(w_start + 0.05, 4)
+            if w_end > end:
+                w_end = end
+
+        if w_start < w_end:
+            words.append((w, w_start, w_end))
+        curr_t = w_end
+
+    return words
+
+
+class SubtitleTimingValidator:
+    """Central validator & timing fixer cho Subtitle Word, Line, Chunk và Clip boundary."""
+
+    @staticmethod
+    def validate_and_fix_words(
+        words: List[Tuple[str, float, float]],
+        start_boundary: float = 0.0,
+        end_boundary: Optional[float] = None,
+        min_word_dur: float = 0.03,
+    ) -> List[Tuple[str, float, float]]:
+        """Validate và nắn chỉnh mốc thời gian từng từ:
+        - start >= start_boundary
+        - end > start
+        - clamp overlap (word.start < prev_end)
+        - clamp end_boundary
+        - loại bỏ word hoàn toàn nằm ngoài boundary
+        """
+        if not words:
+            return []
+
+        fixed_words: List[Tuple[str, float, float]] = []
+        prev_end = start_boundary
+
+        for w_tuple in words:
+            if len(w_tuple) < 3:
+                continue
+            w_text, w_start, w_end = w_tuple[0], float(w_tuple[1]), float(w_tuple[2])
+
+            if end_boundary is not None and w_start >= end_boundary:
+                continue
+            if w_end <= start_boundary:
+                continue
+
+            w_start = max(start_boundary, w_start)
+            if end_boundary is not None:
+                w_end = min(end_boundary, w_end)
+
+            if w_start < prev_end - 0.0001:
+                w_start = prev_end
+
+            if w_end <= w_start:
+                w_end = round(w_start + min_word_dur, 4)
+                if end_boundary is not None and w_end > end_boundary:
+                    w_end = end_boundary
+
+            if w_end > w_start:
+                w_start_r = round(w_start, 4)
+                w_end_r = round(w_end, 4)
+                if w_end_r > w_start_r:
+                    fixed_words.append((w_text, w_start_r, w_end_r))
+                    prev_end = w_end_r
+
+        return fixed_words
+
+    @classmethod
+    def validate_and_fix_line(
+        cls,
+        line: SubtitleLine,
+        clip_duration: float = 0.0,
+    ) -> SubtitleLine:
+        """Validate và clamp mốc thời gian cho SubtitleLine."""
+        eff_clip_dur = clip_duration if clip_duration > 0.0 else None
+
+        line_start = max(0.0, float(line.start))
+        line_end = float(line.end)
+
+        if eff_clip_dur is not None:
+            line_end = min(eff_clip_dur, line_end)
+
+        if line_end <= line_start:
+            line_end = line_start + 0.1
+
+        fixed_words = cls.validate_and_fix_words(
+            line.words,
+            start_boundary=line_start,
+            end_boundary=line_end if eff_clip_dur else None,
+        )
+
+        return SubtitleLine(
+            text=line.text,
+            start=round(line_start, 4),
+            end=round(line_end, 4),
+            words=fixed_words,
+            timestamp_source=line.timestamp_source,
+        )
+
+
 def validate_subtitle_line(line: SubtitleLine, clip_duration: float = 0.0) -> bool:
     """Kiểm tra tính hợp lệ mốc thời gian dòng phụ đề và word-level timestamps:
     - start >= 0
@@ -118,7 +262,7 @@ class SubtitleLayoutEngine:
         
         Đảm bảo:
         - 100% giữ nguyên timing mốc từ (word.start, word.end)
-        - Ngắt chunk theo Dấu câu, Khoảng nghỉ (pause > 0.35s), Max words và Pixel width
+        - Ngắt chunk theo Dấu câu, Khoảng nghỉ (pause > 0.35s), Max words, Natural phrase boundaries và Pixel width
         - Tách 2 dòng cân bằng pixel nếu 1 dòng vượt max_width_px
         """
         words = subtitle_line.words
@@ -129,12 +273,18 @@ class SubtitleLayoutEngine:
         curr_chunk: List[Tuple[str, float, float]] = []
 
         PUNCTUATION_ENDINGS = (",", ".", "!", "?", ";", ":", "-", "...")
+        UNNATURAL_SPLIT_AFTER = {
+            "DON'T", "CAN'T", "WON'T", "ISN'T", "AREN'T", "WASN'T", "WEREN'T", "HAVEN'T", "HASN'T", "HADN'T",
+            "WOULDN'T", "SHOULDN'T", "COULDN'T", "I'M", "YOU'RE", "HE'S", "SHE'S", "IT'S", "WE'RE", "THEY'RE",
+            "THE", "A", "AN", "MY", "YOUR", "HIS", "HER", "ITS", "OUR", "THEIR", "THIS", "THAT", "THESE", "THOSE"
+        }
 
         for i, w_info in enumerate(words):
             w_word, w_start, w_end = w_info[0], w_info[1], w_info[2]
             curr_chunk.append(w_info)
 
             chunk_text = " ".join(w[0].strip() for w in curr_chunk)
+            clean_w_upper = re.sub(r"[^\w]", "", w_word).upper().strip()
             has_punctuation = any(w_word.strip().endswith(p) for p in PUNCTUATION_ENDINGS)
 
             has_pause = False
@@ -147,7 +297,18 @@ class SubtitleLayoutEngine:
             is_max_chars = len(chunk_text) >= max_chars_per_chunk
             is_over_width = cls.measure_text_width(chunk_text, font) >= int(max_width_px * 1.4)
 
-            if has_punctuation or has_pause or is_max_words or is_max_chars or is_over_width:
+            # Phân tách ưu tiên theo dấu câu / khoảng lặng trước, tránh ngắt giữa phrase nếu dính unnatural split
+            should_split = False
+            if has_punctuation or has_pause:
+                should_split = True
+            elif is_max_words or is_max_chars or is_over_width:
+                # Nếu từ hiện tại là unnatural split (ví dụ "don't"), trì hoãn 1 từ nếu chưa vượt quá 1.5x giới hạn
+                if clean_w_upper in UNNATURAL_SPLIT_AFTER and i < len(words) - 1 and len(curr_chunk) < max_words_per_chunk + 1:
+                    should_split = False
+                else:
+                    should_split = True
+
+            if should_split:
                 raw_chunks.append(curr_chunk)
                 curr_chunk = []
 
@@ -202,6 +363,10 @@ class SubtitleLayoutEngine:
                         penalty += (w1 - max_width_px) * 10.0
                     if w2 > max_width_px:
                         penalty += (w2 - max_width_px) * 10.0
+
+                    last_w_l1 = re.sub(r"[^\w]", "", l1[-1][0]).upper().strip()
+                    if last_w_l1 in UNNATURAL_SPLIT_AFTER:
+                        penalty += 80.0
 
                     diff = abs(w1 - w2) + penalty
 
@@ -505,13 +670,14 @@ def create_subtitles_from_transcript(
 ) -> tuple:
     """Tạo file ASS subtitle CapCut Active Word từ transcript segments và trả về (sub_path, timed_emojis)."""
     subtitle_lines: List[SubtitleLine] = []
+    clip_dur = max(0.0, clip_end - clip_start)
 
     for seg in segments:
-        if seg.end < clip_start or seg.start > clip_end:
+        if seg.end <= clip_start or seg.start >= clip_end:
             continue
 
         relative_start = round(max(0.0, seg.start - clip_start), 4)
-        relative_end = round(min(clip_end - clip_start, seg.end - clip_start), 4)
+        relative_end = round(min(clip_dur, seg.end - clip_start), 4)
 
         if relative_end <= relative_start:
             continue
@@ -522,47 +688,31 @@ def create_subtitles_from_transcript(
                 if word_seg.end <= clip_start or word_seg.start >= clip_end:
                     continue
                 w_start = round(max(0.0, word_seg.start - clip_start), 4)
-                w_end = round(min(clip_end - clip_start, word_seg.end - clip_start), 4)
+                w_end = round(min(clip_dur, word_seg.end - clip_start), 4)
                 if w_start < w_end:
                     words.append((word_seg.word, w_start, w_end))
 
+            words = SubtitleTimingValidator.validate_and_fix_words(
+                words,
+                start_boundary=relative_start,
+                end_boundary=relative_end,
+            )
+
         ts_source = "whisper"
-        # FALLBACK: Nếu không có mốc từ thực tế từ audio, phân bổ thời lượng theo độ dài từ (Char-Weighted) & khoảng ngắt dấu câu
         if not words and seg.text.strip():
             ts_source = "fallback"
-            logger.warning(f"⚠️ Transcript thiếu word timestamps thực tế cho segment: '{seg.text[:30]}...'. Đang sử dụng fallback timestamp.")
-            raw_words = seg.text.strip().split()
-            if raw_words and relative_end > relative_start:
-                total_dur = relative_end - relative_start
+            logger.warning(f"⚠️ Transcript thiếu word timestamps thực tế cho segment: '{seg.text[:30]}...'. Đang sử dụng estimate_word_timings.")
+            words = estimate_word_timings(seg.text.strip(), relative_start, relative_end)
 
-                def _calc_word_weight(w: str) -> float:
-                    clean_w = re.sub(r"[^\w]", "", w)
-                    weight = max(1.0, float(len(clean_w)))
-                    if w.endswith((",", ";", ":")):
-                        weight += 1.5
-                    elif w.endswith((".", "!", "?")):
-                        weight += 2.5
-                    return weight
-
-                weights = [_calc_word_weight(w) for w in raw_words]
-                total_weight = sum(weights) if sum(weights) > 0 else 1.0
-
-                curr_t = relative_start
-                for i, w in enumerate(raw_words):
-                    w_dur = (weights[i] / total_weight) * total_dur
-                    w_start = round(curr_t, 4)
-                    w_end = round(min(relative_end, curr_t + w_dur), 4)
-                    if w_start < w_end:
-                        words.append((w, w_start, w_end))
-                    curr_t = w_end
-
-        subtitle_lines.append(SubtitleLine(
+        line = SubtitleLine(
             text=seg.text,
             start=relative_start,
             end=relative_end,
             words=words,
             timestamp_source=ts_source,
-        ))
+        )
+        line = SubtitleTimingValidator.validate_and_fix_line(line, clip_duration=clip_dur)
+        subtitle_lines.append(line)
 
     return generate_ass_subtitle(
         subtitle_lines,

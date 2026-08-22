@@ -62,23 +62,67 @@ ENGLISH_STOP_WORDS = {
 
 
 
+NEGATION_WORDS = {
+    "NEVER", "CAN'T", "DON'T", "WON'T", "NOT", "NO", "NOTHING", "NOBODY", "NEITHER", "NOR",
+    "SHOULDN'T", "WOULDN'T", "COULDN'T", "DIDN'T", "HAVEN'T", "HASN'T", "HADN'T",
+    "CANT", "DONT", "WONT", "ISNT", "ARENT", "WASNT", "WERENT", "HAVENT", "HASNT", "HADNT",
+    "SHOULDNT", "WOULDNT", "COULDNT", "DIDNT"
+}
+
+EMOTIONAL_WORDS = {
+    "LOVE", "HATE", "CRAZY", "AMAZING", "WORST", "BEST", "INSANE", "SHOCKING", "TERRIBLE",
+    "AWFUL", "BEAUTIFUL", "HORRIBLE", "SCARED", "FEAR", "FURIOUS", "DISGUSTING", "UNBELIEVABLE"
+}
+
+ACTION_PUNCHLINE_WORDS = {
+    "WHY", "HOW", "WHAT", "MONEY", "LIE", "LIAR", "CHEAT", "CHEATING", "DIVORCE", "COURT",
+    "JUDGE", "KILL", "KILLED", "STEAL", "STOLE", "JAIL", "PRISON", "SCAM", "TRUTH", "SECRET",
+    "EXPOSED", "REVEALED", "PROOF", "GUILTY", "POLICE", "LAWSUIT", "MURDER", "DEATH"
+}
+
+
+def calculate_word_semantic_score(word_text: str, duration: float = 0.0) -> float:
+    """Tính điểm ý nghĩa ngữ pháp / cảm xúc / tác động của một từ để chọn từ highlight."""
+    clean_w = re.sub(r"[^\w]", "", word_text).upper().strip()
+    if not clean_w:
+        return -100.0
+
+    score = 0.0
+
+    if clean_w in NEGATION_WORDS:
+        score += 5.0
+    elif clean_w in EMOTIONAL_WORDS:
+        score += 4.5
+    elif clean_w in ACTION_PUNCHLINE_WORDS:
+        score += 4.0
+
+    if clean_w in ENGLISH_STOP_WORDS and clean_w not in NEGATION_WORDS:
+        score -= 10.0
+    else:
+        score += 1.0
+
+    score += min(len(clean_w), 8) * 0.2
+    if duration > 0.0:
+        score += min(duration, 1.5) * 1.5
+
+    return score
+
+
 def _select_emphasis_words_in_chunk(chunk: List[Tuple[str, float, float]]) -> set:
-    """Tự động chọn duy nhất 1 từ nhấn mạnh trong cụm CHỈ KHI cụm có từ 2 từ trở lên (cụm 1 từ giữ 100% màu Trắng)."""
+    """Tự động chọn duy nhất 1 từ nhấn mạnh nhất trong cụm bằng thuật toán Semantic / Emotion / Action Scoring."""
     if not chunk or len(chunk) < 2:
         return set()
 
-    indices = []
+    best_idx = 0
+    best_score = -float("inf")
+
     for idx, (word_text, s, e) in enumerate(chunk):
-        clean_w = re.sub(r"[^\w\s]", "", word_text).upper().strip()
-        if clean_w and clean_w not in ENGLISH_STOP_WORDS:
-            indices.append(idx)
+        dur = max(0.0, e - s)
+        score = calculate_word_semantic_score(word_text, duration=dur)
+        if score > best_score:
+            best_score = score
+            best_idx = idx
 
-    if not indices:
-        longest_idx = max(range(len(chunk)), key=lambda i: len(chunk[i][0]))
-        return {longest_idx}
-
-    # Chọn 1 từ nhấn mạnh có độ dài lớn nhất hoặc mang cảm xúc mạnh nhất
-    best_idx = max(indices, key=lambda i: len(chunk[i][0]))
     return {best_idx}
 
 
