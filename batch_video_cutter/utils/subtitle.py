@@ -208,16 +208,15 @@ def add_emoji_to_text(text: str) -> str:
     return res or "✨"
 
 
-def estimate_word_timings(
+def fallback_estimate_word_timings(
     text: str,
     start: float,
     end: float,
 ) -> List[Tuple[str, float, float]]:
-    """Tự động phân bổ thời lượng từ (estimate_word_timings) theo thứ tự ưu tiên:
-    1. Trả về rỗng nếu text rỗng hoặc duration <= 0.
-    2. Char-Weighted Allocation + Punctuation Pause Weight.
-    3. Uniform fallback nếu sum(weights) <= 0.
-    Gắn mốc từ hoàn toàn hợp lệ mà không có overlap hay negative duration.
+    """Hàm cô lập dự phòng (Fallback Estimation) khi Whisper không cung cấp word timestamps.
+    
+    Phân bổ thời lượng theo trọng số độ dài từ và dấu câu. Gắn nhãn nguồn 'fallback'.
+    TUYỆT ĐỐI KHÔNG tự động đè lên mốc thời gian thật khi Whisper đã cung cấp word timestamps.
     """
     if not text or not text.strip() or end <= start:
         return []
@@ -263,6 +262,15 @@ def estimate_word_timings(
         curr_t = w_end
 
     return words
+
+
+def estimate_word_timings(
+    text: str,
+    start: float,
+    end: float,
+) -> List[Tuple[str, float, float]]:
+    """Tương thích ngược — gọi hàm fallback_estimate_word_timings."""
+    return fallback_estimate_word_timings(text, start, end)
 
 
 class SubtitleTimingValidator:

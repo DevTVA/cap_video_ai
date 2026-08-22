@@ -1,10 +1,14 @@
-"""Word timing model và module chuẩn hóa mốc thời gian từ (Word-level timestamps).
-
-Cung cấp dữ liệu chuẩn hóa cho pipeline phụ đề (ASS / PNG Graphic Subtitle).
-"""
-
+import math
+from enum import Enum
 from dataclasses import dataclass
 from typing import List, Optional, Tuple, Union, Any
+
+
+class TimingSource(str, Enum):
+    """Enum xác định nguồn gốc mốc thời gian của từ đơn."""
+    WHISPER = "whisper"
+    SRT = "srt"
+    FALLBACK = "fallback"
 
 
 @dataclass
@@ -15,15 +19,26 @@ class WordTiming:
         text: Nội dung từ.
         start: Thời điểm bắt đầu (giây).
         end: Thời điểm kết thúc (giây).
-        confidence: Độ tin cậy (0.0 - 1.0).
-        timing_source: Nguồn mốc thời gian ('whisper', 'srt', 'estimated').
+        confidence: Độ tin cậy (0.0 - 1.0) hoặc None nếu không có.
+        timing_source: Nguồn mốc thời gian (TimingSource.WHISPER, SRT, FALLBACK).
+        segment_index: Chỉ mục segment chứa từ.
+        word_index: Chỉ mục vị trí từ trong câu.
     """
 
     text: str
     start: float
     end: float
-    confidence: float = 0.0
-    timing_source: str = "whisper"
+    confidence: Optional[float] = None
+    timing_source: Union[TimingSource, str] = TimingSource.WHISPER
+    segment_index: Optional[int] = None
+    word_index: Optional[int] = None
+
+    def __post_init__(self):
+        if isinstance(self.timing_source, str):
+            try:
+                self.timing_source = TimingSource(self.timing_source.lower())
+            except ValueError:
+                self.timing_source = TimingSource.WHISPER
 
     @property
     def word(self) -> str:
@@ -33,7 +48,7 @@ class WordTiming:
     @property
     def probability(self) -> float:
         """Alias tương thích ngược với WordSegment.probability."""
-        return self.confidence
+        return self.confidence if self.confidence is not None else 0.0
 
     def to_tuple(self) -> Tuple[str, float, float]:
         """Chuyển thành tuple (word_text, start, end) chuẩn cho subtitle layout."""
@@ -46,15 +61,15 @@ def normalize_word_timings(
     range_end: Optional[float] = None,
     make_relative: bool = False,
     min_word_dur: float = 0.03,
-    default_source: str = "whisper",
+    default_source: Union[TimingSource, str] = TimingSource.WHISPER,
 ) -> List[WordTiming]:
     """Chuẩn hóa mốc thời gian từng từ qua pipeline 9 bước:
     1. Parse input items sang WordTiming objects.
-    2. Validate text không rỗng & lọc bỏ từ không hợp lệ.
-    3. Sort danh sách theo start time tăng dần.
+    2. Validate text không rỗng & lọc bỏ từ không hợp lệ (NaN, None).
+    3. Sort danh sách theo start time tăng dần (monotonic).
     4. Sửa timestamp âm (start >= 0).
     5. Fix invalid end time (end <= start -> end = start + min_dur).
-    6. Resolve abnormal overlap (clamp w[i].start = prev_end).
+    6. Resolve abnormal overlap & đảm bảo end > start sau khi dời start.
     7. Clip to requested range (intersection giữa range_start và range_end).
     8. Convert to clip-relative time (nếu make_relative=True).
     9. Trả về danh sách WordTiming hợp lệ.
@@ -65,7 +80,7 @@ def normalize_word_timings(
         range_end: Mốc kết thúc khoảng thời gian cần cắt/clip (giây).
         make_relative: Nếu True, chuyển mốc thời gian về tương đối tính từ range_start.
         min_word_dur: Thời lượng tối thiểu cho một từ (mặc định 0.03s).
-        default_source: Nguồn gốc timestamp mặc định ('whisper', 'srt', 'estimated').
+        default_source: Nguồn gốc timestamp mặc định ('whisper', 'srt', 'fallback').
 
     Returns:
         Danh sách WordTiming đã chuẩn hóa hoàn toàn.
@@ -73,35 +88,70 @@ def normalize_word_timings(
     if not words:
         return []
 
+    def _is_invalid_float(val: Any) -> bool:
+        if val is None:
+            return True
+        try:
+            f = float(val)
+            return math.isnan(f) or math.isinf(f)
+        except (ValueError, TypeError):
+            return True
+
     # 1. Parse input sang WordTiming objects
     parsed: List[WordTiming] = []
-    for w in words:
+    for idx, w in enumerate(words):
         if isinstance(w, WordTiming):
+            txt = str(w.text or "").strip()
+            if _is_invalid_float(w.start) or _is_invalid_float(w.end):
+                continue
+            s_val = float(w.start)
+            e_val = float(w.end)
+            conf = float(w.confidence) if (w.confidence is not None and not _is_invalid_float(w.confidence)) else None
+            source = w.timing_source or default_source
+            seg_idx = w.segment_index
+            w_idx = w.word_index if w.word_index is not None else idx
             wt = WordTiming(
-                text=w.text.strip(),
-                start=float(w.start),
-                end=float(w.end),
-                confidence=float(w.confidence),
-                timing_source=w.timing_source or default_source,
+                text=txt,
+                start=s_val,
+                end=e_val,
+                confidence=conf,
+                timing_source=source,
+                segment_index=seg_idx,
+                word_index=w_idx,
             )
         elif isinstance(w, (tuple, list)) and len(w) >= 3:
+            txt = str(w[0] or "").strip()
+            if _is_invalid_float(w[1]) or _is_invalid_float(w[2]):
+                continue
+            s_val = float(w[1])
+            e_val = float(w[2])
             wt = WordTiming(
-                text=str(w[0]).strip(),
-                start=float(w[1]),
-                end=float(w[2]),
-                confidence=0.0,
+                text=txt,
+                start=s_val,
+                end=e_val,
+                confidence=None,
                 timing_source=default_source,
+                word_index=idx,
             )
         elif hasattr(w, "start") and hasattr(w, "end"):
-            txt = getattr(w, "text", getattr(w, "word", ""))
-            conf = getattr(w, "confidence", getattr(w, "probability", 0.0))
+            txt = str(getattr(w, "text", getattr(w, "word", "")) or "").strip()
+            if _is_invalid_float(w.start) or _is_invalid_float(w.end):
+                continue
+            s_val = float(w.start)
+            e_val = float(w.end)
+            conf_raw = getattr(w, "confidence", getattr(w, "probability", None))
+            conf = float(conf_raw) if (conf_raw is not None and not _is_invalid_float(conf_raw)) else None
             source = getattr(w, "timing_source", default_source)
+            seg_idx = getattr(w, "segment_index", None)
+            w_idx = getattr(w, "word_index", idx)
             wt = WordTiming(
-                text=str(txt).strip(),
-                start=float(w.start),
-                end=float(w.end),
-                confidence=float(conf),
+                text=txt,
+                start=s_val,
+                end=e_val,
+                confidence=conf,
                 timing_source=source,
+                segment_index=seg_idx,
+                word_index=w_idx,
             )
         else:
             continue
@@ -114,13 +164,12 @@ def normalize_word_timings(
     if not parsed:
         return []
 
-    # 3. Sort theo start time tăng dần (và end time nếu trùng start)
-    parsed.sort(key=lambda x: (x.start, x.end))
+    # 3. Sort theo start time tăng dần (monotonic) và theo word_index nếu trùng start
+    parsed.sort(key=lambda x: (x.start, x.end, x.word_index or 0))
 
     # 4. Intersection check với range_start và range_end trước khi clamp
     filtered_and_clamped: List[WordTiming] = []
     for wt in parsed:
-        # Nếu truyền range, kiểm tra intersection: segment.end > range_start và segment.start < range_end
         if range_start is not None and wt.end <= range_start:
             continue
         if range_end is not None and wt.start >= range_end:
@@ -138,7 +187,7 @@ def normalize_word_timings(
         # Không cho phép timestamp âm
         w_start = max(0.0, w_start)
 
-        # Fix invalid end time
+        # Fix invalid end time (end <= start -> end = start + min_dur)
         if w_end <= w_start:
             w_end = round(w_start + min_word_dur, 4)
             if range_end is not None and w_end > range_end:
@@ -152,16 +201,18 @@ def normalize_word_timings(
     if not filtered_and_clamped:
         return []
 
-    # 5. Resolve abnormal overlap
+    # 5. Resolve abnormal overlap & đảm bảo end > start sau khi dời start
     fixed_overlap: List[WordTiming] = []
     prev_end = 0.0
     if range_start is not None:
         prev_end = max(0.0, range_start)
 
     for wt in filtered_and_clamped:
+        # Nếu start bị trùng/nhỏ hơn prev_end, dời start = prev_end
         if wt.start < prev_end - 0.0001:
             wt.start = prev_end
 
+        # Phải đảm bảo end luôn lớn hơn start sau khi đã dời start
         if wt.end <= wt.start:
             wt.end = round(wt.start + min_word_dur, 4)
             if range_end is not None and wt.end > range_end:
