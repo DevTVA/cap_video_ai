@@ -88,12 +88,12 @@ class Style5(BaseStyle):
         return "yellow"
 
     def get_font_size(self) -> int:
-        """Cỡ font 54pt vừa vặn thanh thoát cho Canvas 1:1."""
-        return 54
+        """Cỡ font 66pt bằng cỡ chữ Style 1 chuẩn đẹp."""
+        return 66
 
     def get_margin_v(self) -> int:
-        """Lề dưới 100px giúp phụ đề hạ xuống vị trí chuẩn đẹp sát chân video 1:1."""
-        return 100
+        """Lề dưới 110px vị trí chuẩn đẹp giống Style 1."""
+        return 110
 
     def get_italic_option(self) -> bool:
         return False
