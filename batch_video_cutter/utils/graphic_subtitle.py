@@ -59,63 +59,7 @@ ENGLISH_STOP_WORDS = {
 }
 
 
-def _split_words_by_rhythm_and_punctuation(
-    words_list: List[Tuple[str, float, float]],
-    max_words: int = 6,
-    max_chars: int = 24,
-) -> List[List[Tuple[str, float, float]]]:
-    """Ngắt cụm từ phụ đề theo Dấu câu (Punctuation), Khoảng dừng hít thở (Pause), Số từ (<=6) VÀ Giới hạn ký tự (<=24)."""
-    if not words_list:
-        return []
 
-    raw_chunks: List[List[Tuple[str, float, float]]] = []
-    current_chunk: List[Tuple[str, float, float]] = []
-
-    for i, w_info in enumerate(words_list):
-        w_word, w_start, w_end = w_info
-        current_chunk.append(w_info)
-
-        chunk_text = " ".join(w[0].strip() for w in current_chunk)
-        has_punctuation = any(w_word.strip().endswith(p) for p in PUNCTUATION_ENDINGS)
-
-        has_pause = False
-        if i < len(words_list) - 1:
-            next_start = words_list[i + 1][1]
-            if next_start - w_end > 0.40:
-                has_pause = True
-
-        is_max_words = len(current_chunk) >= max_words
-        is_max_chars = len(chunk_text) >= max_chars
-
-        if has_punctuation or has_pause or is_max_words or is_max_chars:
-            raw_chunks.append(current_chunk)
-            current_chunk = []
-
-    if current_chunk:
-        raw_chunks.append(current_chunk)
-
-    # Post-process: Gộp cụm quá ngắn (< 0.45s hoặc <= 2 từ) với cụm liền sau để giữ câu thoại tĩnh mượt 100% chuẩn CapCut Pro
-    merged_chunks: List[List[Tuple[str, float, float]]] = []
-    for chunk in raw_chunks:
-        if not merged_chunks:
-            merged_chunks.append(chunk)
-            continue
-
-        prev = merged_chunks[-1]
-        prev_dur = prev[-1][2] - prev[0][1]
-        prev_text = " ".join(w[0].strip() for w in prev)
-        curr_text = " ".join(w[0].strip() for w in chunk)
-
-        combined_words = len(prev) + len(chunk)
-        combined_chars = len(prev_text) + 1 + len(curr_text)
-        has_prev_punc = any(prev[-1][0].strip().endswith(p) for p in PUNCTUATION_ENDINGS)
-
-        if (prev_dur < 0.45 or len(prev) <= 2) and not has_prev_punc and combined_words <= max_words and combined_chars <= (max_chars + 4):
-            merged_chunks[-1] = prev + chunk
-        else:
-            merged_chunks.append(chunk)
-
-    return merged_chunks
 
 
 def _select_emphasis_words_in_chunk(chunk: List[Tuple[str, float, float]]) -> set:
@@ -390,9 +334,9 @@ def generate_graphic_subtitles(
         emoji_img = None
         if emoji_on_top:
             chunk_text = " ".join(w[0] for w in chunk)
-            chunk_emoji = extract_emoji_for_phrase(chunk_text, fallback_default=False, random_prob=0.5)
+            chunk_emoji = extract_emoji_for_phrase(chunk_text, fallback_default=False, random_prob=0.0)
             if not chunk_emoji and chunk_idx == 0:
-                chunk_emoji = extract_emoji_for_phrase(chunk_text, fallback_default=True)
+                chunk_emoji = extract_emoji_for_phrase(chunk_text, fallback_default=False, allow_random=False)
 
             if chunk_emoji:
                 emoji_png_path = get_emoji_png_path(chunk_emoji)
@@ -406,39 +350,19 @@ def generate_graphic_subtitles(
 
 
 
-        # 2. Xây dựng mốc thời gian Highlight Beat Accumulation (Gom từ động theo tốc độ nói)
+        # 2. Xây dựng mốc thời gian Highlight chuẩn word-by-word từ timestamp gốc
         time_intervals = []
         n_words = len(chunk)
-        chunk_dur = max(chunk_end - chunk_start, 0.1)
-        words_per_sec = n_words / chunk_dur
-
-        # Tính động min_beat_duration: nói càng nhanh (words_per_sec lớn), ngưỡng gộp nhịp càng nhỏ (0.05s-0.08s)
-        if words_per_sec >= 4.0:
-            min_beat_duration = 0.05
-        elif words_per_sec >= 3.0:
-            min_beat_duration = 0.07
-        else:
-            min_beat_duration = 0.08
-
-        idx_curr = 0
-        while idx_curr < n_words:
-            beat_start = chunk_start if idx_curr == 0 else max(chunk[idx_curr - 1][2], chunk[idx_curr][1])
-            beat_end = chunk[idx_curr][2]
-            idx_next = idx_curr + 1
-            while (beat_end - beat_start) < min_beat_duration and idx_next < n_words:
-                beat_end = chunk[idx_next][2]
-                idx_next += 1
-
-            if idx_next < n_words:
-                beat_end = chunk[idx_next][1]
-            else:
-                beat_end = chunk_end
-
-            active_indices = tuple(range(idx_curr, max(idx_curr + 1, idx_next)))
-            if beat_end > beat_start + 0.02:
-                time_intervals.append((active_indices, beat_start, beat_end))
-
-            idx_curr = max(idx_curr + 1, idx_next)
+        for i_w, w_info in enumerate(chunk):
+            w_start, w_end = w_info[1], w_info[2]
+            w_start = round(max(chunk_start, w_start), 4)
+            w_end = round(min(chunk_end, w_end), 4)
+            if i_w < n_words - 1:
+                next_start = chunk[i_w + 1][1]
+                if 0.0 < (next_start - w_end) < 0.05:
+                    w_end = round(next_start, 4)
+            if w_end > w_start + 0.01:
+                time_intervals.append(((i_w,), w_start, w_end))
 
         if not time_intervals:
             time_intervals = [(None, chunk_start, chunk_end)]

@@ -56,7 +56,7 @@ class SubtitleLayoutEngine:
 
     @staticmethod
     def get_font(font_name: str, font_size: int):
-        """Nạp font chuẩn từ assets/fonts hoặc C:/Windows/Fonts với fallback minh bạch."""
+        """Nạp font chuẩn từ assets/fonts/ với fallback minh bạch, không phụ thuộc C:/Windows/Fonts."""
         from PIL import ImageFont
 
         fonts_dir = Path(__file__).parent.parent / "assets" / "fonts"
@@ -72,16 +72,7 @@ class SubtitleLayoutEngine:
                     except Exception:
                         pass
 
-        # 2. Kiểm tra C:/Windows/Fonts/impact.ttf nếu yêu cầu Impact
-        if "impact" in clean_target:
-            win_impact = Path("C:/Windows/Fonts/impact.ttf")
-            if win_impact.exists():
-                try:
-                    return ImageFont.truetype(str(win_impact), font_size)
-                except Exception:
-                    pass
-
-        # 3. Fallback sang các font chất lượng cao sẵn có trong assets/fonts
+        # 2. Fallback sang các font chất lượng cao sẵn có trong assets/fonts
         fallback_names = [
             "Montserrat-Bold.ttf",
             "LuckiestGuy-Regular.ttf",
@@ -317,41 +308,18 @@ POPULAR_RANDOM_EMOJIS = [
 
 
 def measure_text_width_pixels(text: str, font_name: str = "Impact", font_size: int = 85) -> int:
-    """Đo độ rộng thực tế từng pixel của chuỗi văn bản bằng font TTF từ assets/fonts."""
-    from PIL import ImageFont
-
-    fonts_dir = Path(__file__).parent.parent / "assets" / "fonts"
-    font_path = None
-
-    # Tìm file font TTF tương ứng trong assets/fonts
-    font_candidates = [
-        f"{font_name}.ttf",
-        f"{font_name}-Regular.ttf",
-        f"{font_name}-Bold.ttf",
-        "Montserrat-Bold.ttf",
-        "LuckiestGuy-Regular.ttf",
-    ]
-    for candidate in font_candidates:
-        p = fonts_dir / candidate
-        if p.exists():
-            font_path = p
-            break
-
-    try:
-        if font_path:
-            font = ImageFont.truetype(str(font_path), font_size)
-        else:
-            font = ImageFont.load_default()
-        bbox = font.getbbox(text)
-        return bbox[2] - bbox[0]
-    except Exception:
-        return len(text) * 40
+    """Đo độ rộng thực tế từng pixel của chuỗi văn bản bằng font nạp từ SubtitleLayoutEngine."""
+    font = SubtitleLayoutEngine.get_font(font_name, font_size)
+    return SubtitleLayoutEngine.measure_text_width(text, font)
 
 
-def extract_emoji_for_phrase(phrase_text: str, fallback_default: bool = False, random_prob: float = 0.4) -> Optional[str]:
-    """Phân tích cụm từ (2-4 từ) để chọn Emoji màu sắc phù hợp hoặc xuất hiện ngẫu nhiên."""
-    import random
-
+def extract_emoji_for_phrase(
+    phrase_text: str,
+    fallback_default: bool = False,
+    random_prob: float = 0.0,
+    allow_random: bool = False,
+) -> Optional[str]:
+    """Phân tích cụm từ (2-4 từ) để chọn Emoji màu sắc phù hợp (Deterministic Mode mặc định)."""
     if not phrase_text:
         return None
     text_lower = phrase_text.lower()
@@ -369,8 +337,8 @@ def extract_emoji_for_phrase(phrase_text: str, fallback_default: bool = False, r
     elif any(w in text_lower for w in ["không", "chưa", "đừng", "not", "don't", "can't", "won't", "no"]):
         return "⚡"
 
-    # 3. Xuất hiện ngẫu nhiên theo Deterministic Hash (giúp output trùng khớp 100% giữa các lần re-run)
-    if fallback_default or random_prob > 0:
+    # 3. Xuất hiện ngẫu nhiên CHỈ KHI được opt-in (allow_random=True hoặc random_prob > 0)
+    if allow_random and (fallback_default or random_prob > 0):
         import hashlib
         h = int(hashlib.md5(phrase_text.encode("utf-8")).hexdigest(), 16)
         rnd_val = (h % 1000) / 1000.0
@@ -383,7 +351,7 @@ def extract_emoji_for_phrase(phrase_text: str, fallback_default: bool = False, r
 
 def add_emoji_to_text(text: str) -> str:
     """Thêm emoji sinh động vào câu phụ đề (tương thích ngược)."""
-    res = extract_emoji_for_phrase(text, fallback_default=True)
+    res = extract_emoji_for_phrase(text, fallback_default=True, allow_random=True)
     return res or "✨"
 
 
@@ -542,16 +510,19 @@ def create_subtitles_from_transcript(
         if seg.end < clip_start or seg.start > clip_end:
             continue
 
-        relative_start = max(0, seg.start - clip_start)
-        relative_end = min(clip_end - clip_start, seg.end - clip_start)
+        relative_start = round(max(0.0, seg.start - clip_start), 4)
+        relative_end = round(min(clip_end - clip_start, seg.end - clip_start), 4)
+
+        if relative_end <= relative_start:
+            continue
 
         words = []
         if hasattr(seg, "words") and seg.words:
             for word_seg in seg.words:
                 if word_seg.end <= clip_start or word_seg.start >= clip_end:
                     continue
-                w_start = max(0.0, word_seg.start - clip_start)
-                w_end = min(clip_end - clip_start, word_seg.end - clip_start)
+                w_start = round(max(0.0, word_seg.start - clip_start), 4)
+                w_end = round(min(clip_end - clip_start, word_seg.end - clip_start), 4)
                 if w_start < w_end:
                     words.append((word_seg.word, w_start, w_end))
 
@@ -559,7 +530,7 @@ def create_subtitles_from_transcript(
         # FALLBACK: Nếu không có mốc từ thực tế từ audio, phân bổ thời lượng theo độ dài từ (Char-Weighted) & khoảng ngắt dấu câu
         if not words and seg.text.strip():
             ts_source = "fallback"
-            logger.debug("⚠️ Đang sử dụng fallback timestamp cho segment không có mốc từ thực tế.")
+            logger.warning(f"⚠️ Transcript thiếu word timestamps thực tế cho segment: '{seg.text[:30]}...'. Đang sử dụng fallback timestamp.")
             raw_words = seg.text.strip().split()
             if raw_words and relative_end > relative_start:
                 total_dur = relative_end - relative_start
@@ -579,8 +550,8 @@ def create_subtitles_from_transcript(
                 curr_t = relative_start
                 for i, w in enumerate(raw_words):
                     w_dur = (weights[i] / total_weight) * total_dur
-                    w_start = curr_t
-                    w_end = min(relative_end, curr_t + w_dur)
+                    w_start = round(curr_t, 4)
+                    w_end = round(min(relative_end, curr_t + w_dur), 4)
                     if w_start < w_end:
                         words.append((w, w_start, w_end))
                     curr_t = w_end
