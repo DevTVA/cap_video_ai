@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 
 from loguru import logger
+from .word_timing import normalize_word_timings, WordTiming
 
 
 @dataclass
@@ -809,24 +810,22 @@ def create_subtitles_from_transcript(
             continue
 
         words = []
-        if hasattr(seg, "words") and seg.words:
-            for word_seg in seg.words:
-                if word_seg.end <= clip_start or word_seg.start >= clip_end:
-                    continue
-                w_start = round(max(0.0, word_seg.start - clip_start), 4)
-                w_end = round(min(clip_dur, word_seg.end - clip_start), 4)
-                if w_start < w_end:
-                    words.append((word_seg.word, w_start, w_end))
-
-            words = SubtitleTimingValidator.validate_and_fix_words(
-                words,
-                start_boundary=relative_start,
-                end_boundary=relative_end,
-            )
-
         ts_source = "whisper"
+        if hasattr(seg, "words") and seg.words:
+            normalized_wt = normalize_word_timings(
+                seg.words,
+                range_start=clip_start,
+                range_end=clip_end,
+                make_relative=True,
+            )
+            words = [wt.to_tuple() for wt in normalized_wt]
+            if normalized_wt:
+                ts_source = getattr(normalized_wt[0], "timing_source", "whisper")
+
+        is_est = False
         if not words and seg.text.strip():
-            ts_source = "fallback"
+            ts_source = "estimated"
+            is_est = True
             logger.warning(f"⚠️ Transcript thiếu word timestamps thực tế cho segment: '{seg.text[:30]}...'. Đang sử dụng estimate_word_timings.")
             words = estimate_word_timings(seg.text.strip(), relative_start, relative_end)
 
@@ -836,6 +835,7 @@ def create_subtitles_from_transcript(
             end=relative_end,
             words=words,
             timestamp_source=ts_source,
+            is_estimated=is_est,
         )
         line = SubtitleTimingValidator.validate_and_fix_line(line, clip_duration=clip_dur)
         subtitle_lines.append(line)

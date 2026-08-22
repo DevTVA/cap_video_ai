@@ -20,11 +20,24 @@ class WordSegment:
         start: Thời điểm bắt đầu (giây).
         end: Thời điểm kết thúc (giây).
         probability: Độ tin cậy (0-1).
+        timing_source: Nguồn mốc thời gian ('whisper', 'srt', 'estimated').
     """
     word: str
     start: float
     end: float
     probability: float = 0.0
+    timing_source: str = "whisper"
+
+    @property
+    def text(self) -> str:
+        """Alias tương thích ngược."""
+        return self.word
+
+    @property
+    def confidence(self) -> float:
+        """Alias tương thích ngược."""
+        return self.probability
+
 
 
 @dataclass
@@ -232,7 +245,7 @@ def try_parse_existing_subtitles(video_path: Path) -> Optional[TranscriptResult]
                     duration=duration,
                     full_text=full_text,
                     has_word_timestamps=False,
-                    timestamp_source="fallback",
+                    timestamp_source="srt",
                 )
         except Exception as e:
             logger.warning(f"Không thể đọc file SRT {srt_file.name}: {e}")
@@ -252,7 +265,7 @@ def try_parse_existing_subtitles(video_path: Path) -> Optional[TranscriptResult]
                     duration=duration,
                     full_text=full_text,
                     has_word_timestamps=False,
-                    timestamp_source="fallback",
+                    timestamp_source="srt",
                 )
         except Exception as e:
             logger.warning(f"Không thể đọc file subtitles.txt: {e}")
@@ -293,16 +306,29 @@ def align_existing_subtitles_with_whisper(
         if not whisper_words:
             return existing_result
 
+        has_any_words = False
         for seg in existing_result.segments:
+            tol = 0.3
             seg_words = [
-                w for w in whisper_words
-                if w.start >= (seg.start - 0.25) and w.end <= (seg.end + 0.25)
+                WordSegment(
+                    word=w.word,
+                    start=max(seg.start, w.start),
+                    end=min(seg.end, w.end),
+                    probability=w.probability,
+                    timing_source="whisper",
+                )
+                for w in whisper_words
+                if (w.end > (seg.start - tol) and w.start < (seg.end + tol))
+                and (min(seg.end, w.end) > max(seg.start, w.start))
             ]
-            seg.words = seg_words
+            if seg_words:
+                has_any_words = True
+                seg.words = seg_words
 
-        existing_result.has_word_timestamps = True
-        existing_result.timestamp_source = "whisper"
-        logger.info(f"  ⚡ [Word Alignment Success] Đã bổ sung {len(whisper_words)} mốc từ audio thực tế cho SRT có sẵn!")
+        if has_any_words:
+            existing_result.has_word_timestamps = True
+            existing_result.timestamp_source = "whisper"
+            logger.info(f"  ⚡ [Word Alignment Success] Đã bổ sung mốc từ audio thực tế cho SRT có sẵn!")
         return existing_result
     except Exception as e:
         logger.warning(f"Word alignment cho SRT thất bại: {e}")
@@ -465,7 +491,10 @@ def get_segments_in_range(
     start_time: float,
     end_time: float,
 ) -> List[SentenceSegment]:
-    """Lấy các segments nằm trong khoảng thời gian.
+    """Lấy các segments nằm trong khoảng thời gian (dùng giao cắt intersection và boundary clamping).
+
+    Segment và word timestamps được giữ lại nếu có bất kỳ đoạn giao cắt nào với khoảng [start_time, end_time].
+    Các mốc thời gian bắt đầu/kết thúc được clamp vừa khít với ranh giới [start_time, end_time].
 
     Args:
         result: Kết quả transcript đầy đủ.
@@ -473,9 +502,44 @@ def get_segments_in_range(
         end_time: Thời điểm kết thúc (giây).
 
     Returns:
-        Danh sách segments trong khoảng.
+        Danh sách segments trong khoảng với mốc thời gian đã được clamp.
     """
-    return [
-        seg for seg in result.segments
-        if seg.start >= start_time and seg.end <= end_time
-    ]
+    clipped_segments: List[SentenceSegment] = []
+
+    for seg in result.segments:
+        # Kiểm tra giao cắt intersection: seg.end > start_time và seg.start < end_time
+        if seg.end <= start_time or seg.start >= end_time:
+            continue
+
+        c_start = max(seg.start, start_time)
+        c_end = min(seg.end, end_time)
+
+        if c_end <= c_start:
+            continue
+
+        # Intersection và clamp tương tự cho word-level timestamp
+        clipped_words: List[WordSegment] = []
+        if seg.words:
+            for w in seg.words:
+                if w.end <= start_time or w.start >= end_time:
+                    continue
+                w_start = max(w.start, start_time)
+                w_end = min(w.end, end_time)
+                if w_end > w_start:
+                    w_source = getattr(w, "timing_source", "whisper")
+                    clipped_words.append(WordSegment(
+                        word=w.word,
+                        start=w_start,
+                        end=w_end,
+                        probability=w.probability,
+                        timing_source=w_source,
+                    ))
+
+        clipped_segments.append(SentenceSegment(
+            text=seg.text,
+            start=round(c_start, 4),
+            end=round(c_end, 4),
+            words=clipped_words,
+        ))
+
+    return clipped_segments
