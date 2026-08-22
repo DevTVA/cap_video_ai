@@ -7,10 +7,10 @@
 
 ## Architecture
 
-### Unified SubtitleLayoutEngine & Pixel-Aware Font Line Wrapping
+### Unified SubtitleChunker & 4-Tier Deterministic Emoji Hierarchy
 - **Ngày**: 2026-08-22
-- **Chi tiết**: Xây dựng `SubtitleLayoutEngine` làm Single Source of Truth cho cả ASS Subtitle generator và PNG Graphic Subtitle generator. Đo độ rộng dòng chữ bằng font pixel thực tế (`font.getbbox()`) từ `assets/fonts/`. Khi cụm từ vượt `max_width_px` (880px), thuật toán tìm điểm ngắt $k$ tối ưu sao cho $\min(|\text{width}(\text{line}_1) - \text{width}(\text{line}_2)|)$ (ưu tiên ngắt sau dấu câu). Giữ nguyên 100% mốc từ `(word, start, end)` gốc.
-- **Files liên quan**: `batch_video_cutter/utils/subtitle.py`, `batch_video_cutter/utils/graphic_subtitle.py`
+- **Chi tiết**: Xây dựng `SubtitleChunker` làm **Single Source of Truth** duy nhất cho cả ASS Subtitle Generator và PNG Graphic Subtitle Generator. Bảo toàn 100% mốc `(start, end)` gốc của Whisper (`timing_source == "whisper"`). Áp dụng quy trình chọn Emoji màu sắc theo 4 tầng ưu tiên giảm dần (1. Semantic Emoji -> 2. Keyword Match -> 3. Emotion/Punctuation -> 4. Fallback Deterministic MD5 Hash), đảm bảo 100% nhất quán qua mọi lần chạy.
+- **Files liên quan**: `batch_video_cutter/utils/subtitle.py`, `batch_video_cutter/utils/graphic_subtitle.py`, `tests/test_subtitle_timing_layout.py`
 
 ### Clip Offset Clamping & Timestamp Invariants
 - **Ngày**: 2026-08-22
