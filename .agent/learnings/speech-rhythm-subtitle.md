@@ -7,6 +7,11 @@
 
 ## Architecture
 
+### Phase 1 Canonical Word Timing Model & Timestamp Normalization
+- **Ngày**: 2026-08-22
+- **Chi tiết**: Khai báo `TimingSource` Enum (`WHISPER`, `SRT`, `FALLBACK`) và chuẩn hóa `WordTiming` làm canonical model. Áp dụng quy tắc bất biến $0.0 \le \text{start} < \text{end}$, lọc bỏ `NaN`/`Inf`/text rỗng, sắp xếp monotonic theo thời gian audio, dời `start = prev_end` khi overlap và đảm bảo `end > start` ($end = start + min\_dur$). Tách riêng hàm `fallback_estimate_word_timings` với nhãn `source="fallback"`, tuyệt đối không đè lên mốc thời gian Whisper gốc.
+- **Files liên quan**: `batch_video_cutter/utils/word_timing.py`, `batch_video_cutter/utils/subtitle.py`, `batch_video_cutter/core/transcriber.py`, `tests/test_word_timing_normalization.py`
+
 ### Unified SubtitleChunker & 4-Tier Deterministic Emoji Hierarchy
 - **Ngày**: 2026-08-22
 - **Chi tiết**: Xây dựng `SubtitleChunker` làm **Single Source of Truth** duy nhất cho cả ASS Subtitle Generator và PNG Graphic Subtitle Generator. Bảo toàn 100% mốc `(start, end)` gốc của Whisper (`timing_source == "whisper"`). Áp dụng quy trình chọn Emoji màu sắc theo 4 tầng ưu tiên giảm dần (1. Semantic Emoji -> 2. Keyword Match -> 3. Emotion/Punctuation -> 4. Fallback Deterministic MD5 Hash), đảm bảo 100% nhất quán qua mọi lần chạy.
