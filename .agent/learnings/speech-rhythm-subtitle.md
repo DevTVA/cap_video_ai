@@ -1,7 +1,7 @@
 # Speech-Rhythm Subtitle Engine
 
-> Tổng hợp kiến thức về thuật toán ngắt nhịp phụ đề chuẩn theo giọng nói nhân vật và xử lý triệt để lỗi chớp nháy phụ đề.
-> Cập nhật lần cuối: 2026-08-16
+> Tổng hợp kiến thức về thuật toán ngắt nhịp phụ đề chuẩn theo giọng nói nhân vật, word-level alignment và vị trí/font size phụ đề đồ họa.
+> Cập nhật lần cuối: 2026-08-22
 
 ---
 
@@ -17,9 +17,28 @@
 - **Chi tiết**: Thay vì lặp qua N ảnh PNG với N overlay filter tuần tự (gây quá tải CPU và giật/lag), sử dụng FFmpeg Concat Demuxer (`-f concat -safe 0 -i g_subs_concat.txt`) để nối toàn bộ PNG phụ đề karaoke thành 1 luồng video duy nhất kèm kênh `yuva420p` và hòa trộn qua 1 filter `overlay=0:0` duy nhất.
 - **Files liên quan**: `batch_video_cutter/core/engine.py`, `batch_video_cutter/utils/graphic_subtitle.py`
 
+### Forced Whisper Audio Alignment cho Existing Subtitles (SRT/Txt)
+- **Ngày**: 2026-08-22
+- **Chi tiết**: Khi nạp phụ đề SRT/txt có sẵn chỉ chứa sentence-level timestamp (`words=[]`), hệ thống tự động gọi Whisper audio stream alignment (`align_existing_subtitles_with_whisper`) để trích xuất `words` (word-level timestamp) thực tế từ audio gốc mà không làm mất cấu trúc câu SRT.
+- **Files liên quan**: `batch_video_cutter/core/transcriber.py`
+
 ---
 
 ## Bugs & Solutions
+
+### Lệch Tốc Độ Thoại Phụ Đề Do Nạp SRT Có Sẵn (Empty Words Fallback)
+- **Ngày**: 2026-08-22
+- **Vấn đề**: Phụ đề dạng karaoke/highlight bị lệch nhịp, trượt khỏi tốc độ thoại thật của nhân vật khi dùng file SRT có sẵn.
+- **Root cause**: Nạp SRT khiến `SentenceSegment.words` bị rỗng (`[]`), dẫn đến kích hoạt fallback chia đều thô sơ `duration_per_word = (relative_end - relative_start) / len(raw_words)`.
+- **Fix**: Thực hiện alignment word timestamp từ audio bằng Whisper cho SRT. Nếu không align được, thay chia đều thô sơ bằng thuật toán **Char-Weighted + Punctuation Pause Alignment** (phân bổ thời lượng theo `len(word)` và trọng số dấu câu ngắt vế).
+- **Files liên quan**: `batch_video_cutter/core/transcriber.py`, `batch_video_cutter/utils/subtitle.py`, `batch_video_cutter/utils/graphic_subtitle.py`
+
+### Phụ Đề Style 5 Bị To VÀ Chênh Cao Lên Giữa Màn Hình
+- **Ngày**: 2026-08-22
+- **Vấn đề**: Phụ đề Style 5 bị lơ lửng ở 70% chiều cao màn hình (`y = 814px`) và cỡ chữ bị to.
+- **Root cause**: `margin_v` bị hardcode 180px cho Canvas 1:1 (`1080x1080`) đẩy phụ đề lên cách đáy 266px; font size 66pt kèm viền 14px + Emoji 3D 68px làm khối phụ đề quá to.
+- **Fix**: Thêm `get_margin_v()` vào `BaseStyle` và override `get_margin_v() -> 100` cho Style 5 (hạ phụ đề cách đáy ~130px), điều chỉnh `get_font_size() -> 54` cho thanh thoát.
+- **Files liên quan**: `batch_video_cutter/styles/base.py`, `batch_video_cutter/styles/style_5.py`, `batch_video_cutter/pipeline.py`, `batch_video_cutter/utils/subtitle.py`
 
 ### Phụ Đề Xuất Hiện Đè Ở Cuối Phần Outcard
 - **Ngày**: 2026-08-16
@@ -51,6 +70,11 @@
 ---
 
 ## Patterns
+
+### Char-Weighted Word Duration Allocation Pattern
+- **Ngày**: 2026-08-22
+- **Chi tiết**: Tính toán thời lượng từ trong câu không có word-level timestamp dựa trên tổng điểm số ký tự `len(clean_word)` cộng thưởng dấu câu (`,`, `;`, `:`) +1.5, (`.`, `!`, `?`) +2.5. Giúp từ ngắn (`a`, `in`) lướt nhanh, từ dài (`extraordinary`) và khoảng ngắt nghỉ kéo dài tự nhiên như giọng nói thực.
+- **Files liên quan**: `batch_video_cutter/utils/subtitle.py`, `batch_video_cutter/utils/graphic_subtitle.py`
 
 ### Dynamic Beat Threshold & Concat Overlay Pattern
 - **Ngày**: 2026-08-16

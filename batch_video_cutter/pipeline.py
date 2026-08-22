@@ -198,7 +198,7 @@ class PipelineOrchestrator:
                             clip_dur = seg.end_time - seg.start_time
                             outcard_start_s = max(0.0, clip_dur - 2.113)
 
-                            # Tạo subtitles chuẩn theo style với độ phân giải canvas chuẩn xác
+                            # Tạo subtitles chuẩn theo style với độ phân giải canvas chuẩn xác và lề dưới linh hoạt
                             sub_path, timed_emojis = await loop.run_in_executor(
                                 None,
                                 functools.partial(
@@ -209,12 +209,13 @@ class PipelineOrchestrator:
                                     output_path=sub_path,
                                     position=sub_position,
                                     font_name=getattr(style, "get_font_name", lambda: "Montserrat Black")(),
-                                    font_size=getattr(style, "get_font_size", lambda: 66)(),
+                                    font_size=getattr(style, "get_font_size", lambda: 54)(),
                                     highlight_color_name=getattr(style, "get_highlight_color", lambda: "yellow")(),
                                     italic=getattr(style, "get_italic_option", lambda: False)(),
                                     add_emojis=True,
                                     canvas_size=style.get_output_resolution(),
                                     outcard_start_s=outcard_start_s,
+                                    margin_v=getattr(style, "get_margin_v", lambda: 110)(),
                                 )
                             )
 

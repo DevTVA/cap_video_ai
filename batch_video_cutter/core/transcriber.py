@@ -57,6 +57,7 @@ class TranscriptResult:
     language: str
     duration: float
     full_text: str
+    has_word_timestamps: bool = True
 
 
 _MODEL_CACHE = {}
@@ -227,6 +228,7 @@ def try_parse_existing_subtitles(video_path: Path) -> Optional[TranscriptResult]
                     language="en",
                     duration=duration,
                     full_text=full_text,
+                    has_word_timestamps=False,
                 )
         except Exception as e:
             logger.warning(f"Không thể đọc file SRT {srt_file.name}: {e}")
@@ -245,11 +247,60 @@ def try_parse_existing_subtitles(video_path: Path) -> Optional[TranscriptResult]
                     language="en",
                     duration=duration,
                     full_text=full_text,
+                    has_word_timestamps=False,
                 )
         except Exception as e:
             logger.warning(f"Không thể đọc file subtitles.txt: {e}")
 
     return None
+
+
+def align_existing_subtitles_with_whisper(
+    existing_result: TranscriptResult,
+    video_path: Path,
+    model_name: str = "base.en",
+    device: str = "auto",
+    compute_type: str = "auto",
+) -> TranscriptResult:
+    """Thực hiện alignment audio với Whisper cho SRT sẵn có để lấy word-level timestamps chuẩn từ audio."""
+    try:
+        model = get_whisper_model(model_name=model_name, device=device, compute_type=compute_type)
+        prompt_text = existing_result.full_text[:500] if existing_result.full_text else ""
+        segments_generator, info = model.transcribe(
+            str(video_path),
+            language="en",
+            word_timestamps=True,
+            vad_filter=True,
+            initial_prompt=prompt_text if prompt_text else None,
+        )
+
+        whisper_words: List[WordSegment] = []
+        for seg in segments_generator:
+            if seg.words:
+                for w in seg.words:
+                    whisper_words.append(WordSegment(
+                        word=w.word.strip(),
+                        start=w.start,
+                        end=w.end,
+                        probability=w.probability,
+                    ))
+
+        if not whisper_words:
+            return existing_result
+
+        for seg in existing_result.segments:
+            seg_words = [
+                w for w in whisper_words
+                if w.start >= (seg.start - 0.25) and w.end <= (seg.end + 0.25)
+            ]
+            seg.words = seg_words
+
+        existing_result.has_word_timestamps = True
+        logger.info(f"  ⚡ [Word Alignment Success] Đã bổ sung {len(whisper_words)} mốc từ audio thực tế cho SRT có sẵn!")
+        return existing_result
+    except Exception as e:
+        logger.warning(f"Word alignment cho SRT thất bại: {e}")
+        return existing_result
 
 
 def transcribe_video(
@@ -281,9 +332,18 @@ def transcribe_video(
     if not video_path.exists():
         raise FileNotFoundError(f"Video không tồn tại: {video_path}")
 
-    # Ưu tiên kiểm tra và nạp file phụ đề có sẵn trong folder để chạy tức thì (0.01s)
+    # Ưu tiên kiểm tra và nạp file phụ đề có sẵn trong folder
     existing_result = try_parse_existing_subtitles(video_path)
     if existing_result:
+        if not existing_result.has_word_timestamps:
+            logger.info("⚡ File SRT/txt có sẵn chưa có mốc từ (word timestamps). Đang align với audio bằng Whisper...")
+            existing_result = align_existing_subtitles_with_whisper(
+                existing_result,
+                video_path,
+                model_name=model_name,
+                device=device,
+                compute_type=compute_type,
+            )
         return existing_result
 
     logger.info(f"Bắt đầu transcribe bằng Whisper: {video_path.name}")

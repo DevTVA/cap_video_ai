@@ -373,11 +373,29 @@ def generate_graphic_subtitles(
         if not words_list and line.text.strip():
             raw_words = line.text.strip().split()
             if raw_words and line.end > line.start:
-                dur = (line.end - line.start) / len(raw_words)
-                words_list = [
-                    (w, line.start + i * dur, line.start + (i + 1) * dur)
-                    for i, w in enumerate(raw_words)
-                ]
+                total_dur = line.end - line.start
+
+                def _calc_word_weight(w: str) -> float:
+                    clean_w = re.sub(r"[^\w]", "", w)
+                    weight = max(1.0, float(len(clean_w)))
+                    if w.endswith((",", ";", ":")):
+                        weight += 1.5
+                    elif w.endswith((".", "!", "?")):
+                        weight += 2.5
+                    return weight
+
+                weights = [_calc_word_weight(w) for w in raw_words]
+                total_weight = sum(weights) if sum(weights) > 0 else 1.0
+
+                curr_t = line.start
+                words_list = []
+                for i, w in enumerate(raw_words):
+                    w_dur = (weights[i] / total_weight) * total_dur
+                    w_start = curr_t
+                    w_end = min(line.end, curr_t + w_dur)
+                    if w_start < w_end:
+                        words_list.append((w, w_start, w_end))
+                    curr_t = w_end
         if words_list:
             for w in words_list:
                 if w[2] > w[1]:

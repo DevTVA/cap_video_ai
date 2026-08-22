@@ -88,8 +88,12 @@ class Style3(BaseStyle):
         return "red"
 
     def get_font_size(self) -> int:
-        """Cỡ font 66pt bằng tỉ lệ cỡ chữ Outcard."""
-        return 66
+        """Cỡ font 54pt vừa vặn cho Style 3 Canvas 1:1."""
+        return 54
+
+    def get_margin_v(self) -> int:
+        """Lề dưới 100px giúp phụ đề hạ xuống vị trí chuẩn đẹp sát chân video 1:1."""
+        return 100
 
     def get_italic_option(self) -> bool:
         return False

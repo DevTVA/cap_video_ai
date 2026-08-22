@@ -83,8 +83,12 @@ class Style4(BaseStyle):
         return "green"
 
     def get_font_size(self) -> int:
-        """Cỡ font 66pt bằng tỉ lệ cỡ chữ Outcard."""
-        return 66
+        """Cỡ font 56pt vừa vặn cho Canvas 3:4."""
+        return 56
+
+    def get_margin_v(self) -> int:
+        """Lề dưới 160px chuẩn phong cách 4."""
+        return 160
 
     def get_italic_option(self) -> bool:
         return False

@@ -329,6 +329,7 @@ def create_subtitles_from_transcript(
     add_emojis: bool = True,
     canvas_size: Tuple[int, int] = (1080, 1080),
     outcard_start_s: Optional[float] = None,
+    margin_v: int = 110,
 ) -> tuple:
     """Tạo file ASS subtitle CapCut Active Word từ transcript segments và trả về (sub_path, timed_emojis)."""
     subtitle_lines: List[SubtitleLine] = []
@@ -343,20 +344,39 @@ def create_subtitles_from_transcript(
         words = []
         if hasattr(seg, "words") and seg.words:
             for word_seg in seg.words:
-                w_start = max(0, word_seg.start - clip_start)
+                if word_seg.end <= clip_start or word_seg.start >= clip_end:
+                    continue
+                w_start = max(0.0, word_seg.start - clip_start)
                 w_end = min(clip_end - clip_start, word_seg.end - clip_start)
                 if w_start < w_end:
                     words.append((word_seg.word, w_start, w_end))
 
-        # FALLBACK: Nếu Whisper không trả về mốc từ chi tiết (cho các video sau như 10, 11, 12), tự tạo mốc thời gian đều
+        # FALLBACK: Nếu không có mốc từ thực tế từ audio, phân bổ thời lượng theo độ dài từ (Char-Weighted) & khoảng ngắt dấu câu
         if not words and seg.text.strip():
             raw_words = seg.text.strip().split()
             if raw_words and relative_end > relative_start:
-                duration_per_word = (relative_end - relative_start) / len(raw_words)
+                total_dur = relative_end - relative_start
+
+                def _calc_word_weight(w: str) -> float:
+                    clean_w = re.sub(r"[^\w]", "", w)
+                    weight = max(1.0, float(len(clean_w)))
+                    if w.endswith((",", ";", ":")):
+                        weight += 1.5
+                    elif w.endswith((".", "!", "?")):
+                        weight += 2.5
+                    return weight
+
+                weights = [_calc_word_weight(w) for w in raw_words]
+                total_weight = sum(weights) if sum(weights) > 0 else 1.0
+
+                curr_t = relative_start
                 for i, w in enumerate(raw_words):
-                    w_start = relative_start + i * duration_per_word
-                    w_end = relative_start + (i + 1) * duration_per_word
-                    words.append((w, w_start, w_end))
+                    w_dur = (weights[i] / total_weight) * total_dur
+                    w_start = curr_t
+                    w_end = min(relative_end, curr_t + w_dur)
+                    if w_start < w_end:
+                        words.append((w, w_start, w_end))
+                    curr_t = w_end
 
         subtitle_lines.append(SubtitleLine(
             text=seg.text,
@@ -373,6 +393,7 @@ def create_subtitles_from_transcript(
         highlight_color_name=highlight_color_name,
         italic=italic,
         position=position,
+        margin_v=margin_v,
         emoji_on_top=add_emojis,
         canvas_size=canvas_size,
         outcard_start_s=outcard_start_s,

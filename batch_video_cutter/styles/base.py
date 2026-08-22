@@ -100,6 +100,10 @@ class BaseStyle(ABC):
         """Kích thước font chữ mặc định cho style (66pt bằng tỉ lệ cỡ chữ Outcard)."""
         return 66
 
+    def get_margin_v(self) -> int:
+        """Khoảng cách lề dưới phụ đề (margin vertical). Mặc định 110px cho vị trí đẹp chuẩn."""
+        return 110
+
 
     def get_highlight_color(self) -> str:
         """Màu Highlight từ active ("green")."""
