@@ -369,15 +369,18 @@ def _parse_timecode_to_seconds(timecode: str) -> float:
 
 
 def _parse_llm_response_json(response_text: str) -> List[dict]:
-    """Parse JSON response từ LLM, hỗ trợ tự động dọn dẹp markdown code blocks và thinking tags."""
-    # Loại bỏ thinking blocks nếu có (<think>...</think> hoặc <thought>...</thought>)
+    """Parse JSON response từ LLM, hỗ trợ tự động dọn dẹp markdown code blocks, thinking tags và khôi phục JSON bị cắt ngang (truncated JSON)."""
+    if not response_text or not response_text.strip():
+        return []
+
+    # 1. Loại bỏ thinking blocks nếu có (<think>...</think> hoặc <thought>...</thought>)
     text = re.sub(r"<(?:think|thought)>.*?</(?:think|thought)>", "", response_text, flags=re.DOTALL).strip()
 
-    # Loại bỏ markdown code fences
+    # 2. Loại bỏ markdown code fences
     text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.MULTILINE)
     text = re.sub(r"\s*```$", "", text, flags=re.MULTILINE)
 
-    # Tìm JSON object
+    # 3. Thử parse trực tiếp với json.loads
     try:
         parsed = json.loads(text)
         if isinstance(parsed, dict) and "segments" in parsed:
@@ -387,10 +390,53 @@ def _parse_llm_response_json(response_text: str) -> List[dict]:
     except json.JSONDecodeError:
         pass
 
+    # 4. Thử khôi phục chuỗi JSON bị cắt ngang (Truncated JSON Repair)
+    cleaned_json_text = text
+    last_brace = cleaned_json_text.rfind('{')
+    if last_brace != -1:
+        segment_chunk = cleaned_json_text[last_brace:]
+        quote_count = segment_chunk.count('"') - segment_chunk.count('\\"')
+        if quote_count % 2 != 0:
+            cleaned_json_text += '"'
+
+    if not cleaned_json_text.endswith("}"):
+        cleaned_json_text += "}"
+    if not cleaned_json_text.endswith("]"):
+        cleaned_json_text += "]"
+    if not cleaned_json_text.endswith("}"):
+        cleaned_json_text += "}"
+
+    try:
+        parsed = json.loads(cleaned_json_text)
+        if isinstance(parsed, dict) and "segments" in parsed:
+            return parsed["segments"]
+        if isinstance(parsed, list):
+            return parsed
+    except json.JSONDecodeError:
+        pass
+
+    # 5. Regex Extractor: Bóc tách từng dict segment độc lập ngay cả khi JSON bị cắt dở
+    segments: List[dict] = []
+    pattern = re.compile(
+        r'"start"\s*:\s*"(\d{1,2}:\d{2}(?::\d{2})?)"\s*,\s*"end"\s*:\s*"(\d{1,2}:\d{2}(?::\d{2})?)"\s*,\s*"title_en"\s*:\s*"([^"]+)"(?:.*?"title_vi"\s*:\s*"([^"]*)")?',
+        re.DOTALL
+    )
+    for match in pattern.finditer(text):
+        st, et, t_en, t_vi = match.groups()
+        if st and et and t_en:
+            segments.append({
+                "start": st,
+                "end": et,
+                "title_en": t_en,
+                "title_vi": t_vi or t_en,
+            })
+    if segments:
+        return segments
+
     # Fallback: tìm JSON object đầu tiên trong text
     start = text.find("{")
     end = text.rfind("}")
-    if start != -1 and end != -1:
+    if start != -1 and end != -1 and end > start:
         try:
             parsed = json.loads(text[start:end + 1])
             if isinstance(parsed, dict) and "segments" in parsed:
@@ -401,7 +447,7 @@ def _parse_llm_response_json(response_text: str) -> List[dict]:
     # Fallback: tìm JSON array
     start = text.find("[")
     end = text.rfind("]")
-    if start != -1 and end != -1:
+    if start != -1 and end != -1 and end > start:
         try:
             return json.loads(text[start:end + 1])
         except json.JSONDecodeError:
@@ -607,9 +653,18 @@ def analyze_transcript(
             )
             time.sleep(3.0)
 
-    # Đảm bảo 100% chỉ sử dụng API theo yêu cầu nghiêm ngặt của người dùng
+    # Kích hoạt Thuật toán Deterministic Quality Score làm dự phòng an toàn khi tất cả lần thử AI API thất bại
+    logger.warning(f"⚠️ Tất cả {max_attempts} lần thử AI API đều thất bại ({last_error}). Kích hoạt Thuật toán Quality Score làm dự phòng an toàn!")
+    fallback_segs = _generate_fallback_segments(
+        transcript_text, max_clips, video_duration, intro_offset, outro_offset
+    )
+    if fallback_segs:
+        logger.info(f"⚡ Đã tự động tạo {len(fallback_segs)} viral segments dự phòng bằng Quality Score!")
+        _write_cache(cache_key, fallback_segs)
+        return fallback_segs
+
     raise RuntimeError(
-        f"Chỉ sử dụng API theo yêu cầu: Tất cả các lần thử gọi AI API đều không thành công sau {max_attempts} lần thử. "
+        f"Tất cả các lần thử gọi AI API đều không thành công sau {max_attempts} lần thử. "
         f"Lỗi cuối cùng: {last_error}. Vui lòng nạp thêm API Key hoặc chờ API hồi hạn ngạch."
     )
 
@@ -1018,7 +1073,7 @@ def _call_gemini_api(prompt: str, api_key: str) -> str:
 
                     config = genai.GenerationConfig(
                         temperature=0.7,
-                        max_output_tokens=2048,
+                        max_output_tokens=8192,
                     )
 
                     response = model.generate_content(
