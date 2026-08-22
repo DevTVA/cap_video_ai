@@ -59,7 +59,7 @@ def test_dialogue_quality_scoring():
 
 def test_cache_versioning():
     key1 = _get_cache_key("test transcript", 2, None)
-    assert ANALYZER_VERSION == "2.0"
+    assert ANALYZER_VERSION == "2.1"
     assert len(key1) == 64  # SHA-256 hex string
 
 

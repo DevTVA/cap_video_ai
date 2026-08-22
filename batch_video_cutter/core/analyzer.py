@@ -18,7 +18,7 @@ from typing import List, Optional
 
 from loguru import logger
 
-ANALYZER_VERSION = "2.0"
+ANALYZER_VERSION = "2.1"
 
 # Threading lock để ngăn các luồng cắt video đồng thời gửi API cùng lúc gây lỗi Rate Limit 429
 _LLM_LOCK = threading.Lock()
@@ -180,6 +180,46 @@ INTRO_KEYWORDS = [
     "cảm ơn đã xem", "đăng ký ngay", "chương trình hôm nay", "chào mừng quay trở lại",
     "xin chào tất cả", "chào mừng các bạn", "kênh của chúng tôi",
 ]
+
+
+def score_dialogue_quality(text: str) -> float:
+    """Đánh giá điểm đối thoại nhân vật (Dialogue Score):
+    - Kiểm tra thông tin speaker tag nếu có (e.g. Speaker A, Speaker B).
+    - Tăng điểm dựa trên sự xuất hiện của từ khóa đối chất / hỏi đáp (Q&A).
+    - Tăng điểm dựa trên mật độ dấu hỏi (?) và câu ngắn thể hiện đáp lời nhanh.
+    - Trừ điểm nặng nếu dính từ khóa intro / promo / monologue.
+    """
+    if not text:
+        return 0.0
+
+    score = 1.0
+    text_lower = text.lower()
+
+    # 1. Trừ điểm nặng nếu có intro keywords
+    for ik in INTRO_KEYWORDS:
+        if ik in text_lower:
+            score -= 0.8
+
+    # 2. Cộng điểm nếu phát hiện Speaker tags (e.g., Speaker 1:, Speaker A:)
+    speakers = set(re.findall(r"\b(?:speaker|person|man|woman|judge|attorney)\s*[\w\d]*\b\s*:", text_lower))
+    if len(speakers) >= 2:
+        score += 1.5
+    elif len(speakers) == 1:
+        score += 0.3
+
+    # 3. Cộng điểm nếu có hỏi đáp & Q&A
+    for dk in DIALOGUE_KEYWORDS:
+        if re.search(dk, text_lower):
+            score += 0.4
+
+    # 4. Cộng điểm nếu có dấu hỏi đáp
+    question_count = text.count("?")
+    if question_count >= 2:
+        score += 0.5
+    elif question_count == 1:
+        score += 0.25
+
+    return max(0.0, score)
 
 
 def is_intro_or_monologue_line(text: str) -> bool:
@@ -1319,26 +1359,42 @@ def _convert_raw_segments(
             end_timecode=end_tc,
         ))
 
-    # Nếu vẫn chưa đủ max_clips, bổ sung các phân đoạn hợp lệ không trùng lặp từ transcript
-    if len(segments) < max_clips:
+    # Nếu vẫn chưa đủ max_clips, tìm kiếm bằng Scoring Matrix thực sự
+    if len(segments) < max_clips and transcript_text:
         valid_start = intro_offset
         valid_end = max(valid_start + 30.0, (video_duration - outro_offset) if video_duration > 0 else 180.0)
-        total_avail = valid_end - valid_start
-        step = total_avail / (max_clips + 1)
 
-        for fill_i in range(len(segments), max_clips):
-            st = valid_start + step * (fill_i + 1)
-            et = min(valid_end, st + 27.0)
-            if transcript_text:
-                shift_attempts = 0
-                while shift_attempts < 15 and not is_segment_clean_and_valid(transcript_text, st, et):
-                    st = min(valid_end - 27.0, st + 15.0)
-                    et = min(valid_end, st + 27.0)
-                    shift_attempts += 1
-            if et - st < 25.0:
-                st = max(valid_start, et - 27.0)
+        # Quét candidate windows (27s - 29s) với bước nhảy 10s
+        candidate_windows = []
+        curr = valid_start
+        while curr + 25.0 <= valid_end:
+            c_start = curr
+            c_end = min(valid_end, c_start + 28.0)
+            if c_end - c_start >= 25.0:
+                c_text = _extract_spoken_text_in_range(transcript_text, c_start, c_end)
+                if is_segment_clean_and_valid(transcript_text, c_start, c_end):
+                    score = score_dialogue_quality(c_text)
+                    candidate_windows.append((score, c_start, c_end, c_text))
+            curr += 10.0
 
-            # Gọi LLM sinh tiêu đề hoặc trích xuất từ thoại transcript thực tế cho segment bổ sung này
+        # Sắp xếp candidate theo score giảm dần
+        candidate_windows.sort(key=lambda x: x[0], reverse=True)
+
+        for score, st, et, c_text in candidate_windows:
+            if len(segments) >= max_clips:
+                break
+            if score < 0.8:
+                continue
+
+            # Chống trùng mốc cắt với các segment đã chọn
+            is_overlap = False
+            for prev_seg in segments:
+                if max(0.0, min(et, prev_seg.end_time) - max(st, prev_seg.start_time)) > 0.0:
+                    is_overlap = True
+                    break
+            if is_overlap:
+                continue
+
             fill_title = ""
             if api_key:
                 try:
@@ -1355,7 +1411,7 @@ def _convert_raw_segments(
                     if 8 <= len(w_txt) <= 10 and c_txt.lower() not in seen_titles:
                         fill_title = c_txt
                 except Exception as ex:
-                    logger.warning(f"Lỗi khi gọi LLM sinh title cho filler segment {fill_i+1}: {ex}")
+                    logger.warning(f"Lỗi khi gọi LLM sinh title cho filler segment {len(segments)+1}: {ex}")
 
             if not fill_title:
                 fill_title = _extract_spoken_headline(transcript_text, st, et, seen_titles)
@@ -1363,7 +1419,7 @@ def _convert_raw_segments(
             seen_titles.add(fill_title.lower())
 
             segments.append(ViralSegment(
-                index=fill_i + 1,
+                index=len(segments) + 1,
                 start_time=st,
                 end_time=et,
                 title_en=fill_title,
