@@ -17,8 +17,9 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 
 from loguru import logger
+from ..config import TITLE_MIN_WORDS, TITLE_MAX_WORDS
 
-ANALYZER_VERSION = "2.1"
+ANALYZER_VERSION = "2.2"
 
 # Threading lock để ngăn các luồng cắt video đồng thời gửi API cùng lúc gây lỗi Rate Limit 429
 _LLM_LOCK = threading.Lock()
@@ -171,7 +172,7 @@ INTRO_KEYWORDS = [
     "welcome to the show", "welcome to our channel", "in today's show", "before we start",
     "make sure to", "hit that button", "leave a comment", "welcome back to", "this episode is",
     "on today's show", "in this episode", "welcome everyone", "welcome all", "on the show", "today on the show",
-    "tell us what you think", "social media", "comment below", "visit our", "tweet us", "follow us",
+    "tell us what you think", "comment below", "visit our", "tweet us", "follow us",
     "coming up next", "when we return", "after the break",
     "show branding", "promo", "[music]", "(music)", "music", "applause", "[applause]",
     "(applause)", "cheering", "[cheering]", "theme song", "intro", "outro", "commercial", "bumper", "station id",
@@ -183,40 +184,38 @@ INTRO_KEYWORDS = [
 
 
 def score_dialogue_quality(text: str) -> float:
-    """Đánh giá điểm đối thoại nhân vật (Dialogue Score):
-    - Kiểm tra thông tin speaker tag nếu có (e.g. Speaker A, Speaker B).
-    - Tăng điểm dựa trên sự xuất hiện của từ khóa đối chất / hỏi đáp (Q&A).
-    - Tăng điểm dựa trên mật độ dấu hỏi (?) và câu ngắn thể hiện đáp lời nhanh.
+    """Đánh giá chất lượng thoại (hội thoại đối đáp vs thuyết minh 1 người).
+    - Thưởng điểm mạnh nếu có 2 speaker trở lên.
+    - Thưởng điểm cho từ khóa đối đáp kịch tính.
+    - Thưởng nhẹ cho dấu hỏi (max +0.5).
     - Trừ điểm nặng nếu dính từ khóa intro / promo / monologue.
     """
     if not text:
         return 0.0
 
-    score = 1.0
+    score = 5.0
     text_lower = text.lower()
 
-    # 1. Trừ điểm nặng nếu có intro keywords
-    for ik in INTRO_KEYWORDS:
-        if ik in text_lower:
-            score -= 0.8
+    if is_intro_or_monologue_line(text_lower):
+        return 0.0
 
-    # 2. Cộng điểm nếu phát hiện Speaker tags (e.g., Speaker 1:, Speaker A:)
-    speakers = set(re.findall(r"\b(?:speaker|person|man|woman|judge|attorney)\s*[\w\d]*\b\s*:", text_lower))
+    # 1. Thưởng điểm nếu phát hiện Speaker tags (e.g., Speaker 1:, Speaker A:, Judge:, Host:)
+    speakers = set(re.findall(r"\b(?:speaker|person|man|woman|judge|attorney|host)\s*[\w\d]*\b\s*:", text_lower))
     if len(speakers) >= 2:
-        score += 1.5
+        score += 3.0
     elif len(speakers) == 1:
-        score += 0.3
-
-    # 3. Cộng điểm nếu có hỏi đáp & Q&A
-    for dk in DIALOGUE_KEYWORDS:
-        if re.search(dk, text_lower):
-            score += 0.4
-
-    # 4. Cộng điểm nếu có dấu hỏi đáp
-    question_count = text.count("?")
-    if question_count >= 2:
         score += 0.5
-    elif question_count == 1:
+
+    # 2. Thưởng điểm cho từ khóa đối đáp kịch tính
+    for pat in DIALOGUE_KEYWORDS:
+        matches = len(re.findall(pat, text_lower))
+        score += matches * 1.0
+
+    # 3. Thưởng nhẹ cho dấu hỏi đáp (không mặc định là 2 speakers)
+    q_count = text.count("?")
+    if q_count >= 2:
+        score += 0.5
+    elif q_count == 1:
         score += 0.25
 
     return max(0.0, score)
@@ -331,29 +330,6 @@ def _extract_spoken_text_in_range(
                     lines_in_range.append(text_part)
     return " ".join(lines_in_range)
 
-
-def score_dialogue_quality(text: str) -> float:
-    """Đánh giá chất lượng thoại (hội thoại đối đáp vs thuyết minh 1 người)."""
-    if not text:
-        return 0.0
-
-    score = 5.0
-    text_lower = text.lower()
-
-    # 1. Thưởng điểm cho từ khóa đối đáp kịch tính
-    for pat in DIALOGUE_KEYWORDS:
-        matches = len(re.findall(pat, text_lower))
-        score += matches * 1.5
-
-    # 2. Thưởng điểm cho câu hỏi đáp (dấu ?)
-    q_count = text.count("?")
-    score += q_count * 2.0
-
-    # 3. Phạt điểm nặng nếu dính từ khóa giới thiệu kênh / show intro / monologue
-    if is_intro_or_monologue_line(text_lower):
-        score -= 10.0
-
-    return max(0.0, score)
 
 
 def load_prompt_template(prompt_path: Optional[Path] = None) -> str:
@@ -604,7 +580,7 @@ def analyze_transcript(
             )
 
             if segments:
-                logger.info(f"Tìm thấy {len(segments)} viral segments ĐẠT CHUẨN 100% ĐỘ DÀI 8-12 TỪ!")
+                logger.info(f"Tìm thấy {len(segments)} viral segments ĐẠT CHUẨN 100% ĐỘ DÀI {TITLE_MIN_WORDS}-{TITLE_MAX_WORDS} TỪ!")
                 _write_cache(cache_key, segments)
                 return segments
 
@@ -615,12 +591,12 @@ def analyze_transcript(
         except ValueError as ve:
             last_error = str(ve)
             logger.warning(
-                f"Attempt {attempt}/{max_attempts} từ chối do tiêu đề không đạt 8-12 từ: {last_error}"
+                f"Attempt {attempt}/{max_attempts} từ chối do tiêu đề không đạt {TITLE_MIN_WORDS}-{TITLE_MAX_WORDS} từ: {last_error}"
             )
             full_prompt += (
-                f"\n\nCRITICAL MANDATORY REQUIREMENT: EVERY title MUST have STRICTLY between 8 and 12 words (8 <= word_count <= 12). "
+                f"\n\nCRITICAL MANDATORY REQUIREMENT: EVERY title MUST have STRICTLY between {TITLE_MIN_WORDS} and {TITLE_MAX_WORDS} words ({TITLE_MIN_WORDS} <= word_count <= {TITLE_MAX_WORDS}). "
                 f"Previous attempt failed with: '{last_error}'. "
-                f"COUNT WORDS CAREFULLY BEFORE OUTPUTTING! Regenerate ALL titles so EVERY title is EXACTLY 8 to 12 words!"
+                f"COUNT WORDS CAREFULLY BEFORE OUTPUTTING! Regenerate ALL titles so EVERY title is EXACTLY {TITLE_MIN_WORDS} to {TITLE_MAX_WORDS} words!"
             )
             time.sleep(2.0)
 
@@ -645,67 +621,58 @@ def _generate_fallback_segments(
     intro_offset: float = 0.0,
     outro_offset: float = 0.0,
 ) -> List[ViralSegment]:
-    """Tự động tạo segments dự phòng khi tất cả API Key LLM đều hết quota 429 hoặc gặp lỗi."""
-    logger.warning("⚡ Tất cả API Key LLM đã cạn kiệt Quota / Rate Limit 429. Tự động kích hoạt Thuật Toán Phân Tích Dự Phòng Thông Minh!")
-    
+    """Tự động tạo segments từ transcript khi tất cả API Key LLM đều hết quota hoặc gặp lỗi."""
+    logger.warning("⚡ Tất cả API Key LLM cạn kiệt Quota. Phân tích transcript bằng Thuật Toán Quality Score!")
+    if not transcript_text:
+        return []
+
     valid_start = intro_offset
     valid_end = max(valid_start + 30.0, (video_duration - outro_offset) if video_duration > 0 else 180.0)
-    total_avail = valid_end - valid_start
 
-    # Đọc các câu spoken lines từ transcript (Lọc bỏ các câu dính từ khóa intro)
-    lines = []
-    for line in transcript_text.splitlines():
-        line = line.strip()
-        if line and "[" in line and "]" in line:
-            parts = line.split("]", 1)
-            text_part = parts[1].strip() if len(parts) > 1 else ""
-            if text_part and score_dialogue_quality(text_part) >= 0.5 and not is_intro_or_monologue_line(text_part):
-                lines.append(text_part)
-                
-    if not lines:
-        lines = ["DRAMATIC CONFRONTATION AND UNEXPECTED TRUTH REVEALED IN SCENE"]
+    candidate_windows = []
+    curr = valid_start
+    while curr + 25.0 <= valid_end:
+        c_start = curr
+        c_end = min(valid_end, c_start + 28.0)
+        if c_end - c_start >= 25.0:
+            c_text = _extract_spoken_text_in_range(transcript_text, c_start, c_end)
+            if is_segment_clean_and_valid(transcript_text, c_start, c_end):
+                score = score_dialogue_quality(c_text)
+                if score >= 1.0:
+                    candidate_windows.append((score, c_start, c_end, c_text))
+        curr += 10.0
+
+    candidate_windows.sort(key=lambda x: x[0], reverse=True)
 
     segments = []
-    clip_count = min(max_clips, max(1, int(total_avail // 35.0)))
-    segment_duration = total_avail / clip_count
+    seen_titles: set = set()
+    for score, st, et, c_text in candidate_windows:
+        if len(segments) >= max_clips:
+            break
 
-    for i in range(clip_count):
-        seg_start = valid_start + (i * segment_duration)
-        seg_end = min(seg_start + min(40.0, segment_duration), valid_end)
-        if seg_end - seg_start < 10.0:
+        is_overlap = False
+        for prev_seg in segments:
+            if max(0.0, min(et, prev_seg.end_time) - max(st, prev_seg.start_time)) > 0.0:
+                is_overlap = True
+                break
+        if is_overlap:
             continue
-            
-        line_index = (i * len(lines)) // clip_count
-        raw_text = lines[line_index] if line_index < len(lines) else lines[0]
-        
-        # Bóc tách từ thoại tự nhiên từ transcript, gom từ các câu tiếp theo nếu thiếu từ
-        clean_words = [w for w in re.sub(r"[^\w\s]", "", raw_text).split() if len(w) > 1]
-        next_idx = line_index + 1
-        while len(clean_words) < 8 and next_idx < len(lines):
-            extra_words = [w for w in re.sub(r"[^\w\s]", "", lines[next_idx]).split() if len(w) > 1]
-            clean_words.extend(extra_words)
-            next_idx += 1
-            
-        if len(clean_words) > 10:
-            clean_words = clean_words[:10]
-        
-        from ..utils.graphic_subtitle import clean_caption_text
-        title_text = clean_caption_text(" ".join(clean_words).upper())
-        
-        start_tc = f"{int(seg_start // 60):02d}:{int(seg_start % 60):02d}"
-        end_tc = f"{int(seg_end // 60):02d}:{int(seg_end % 60):02d}"
-        
-        seg = ViralSegment(
-            index=i + 1,
-            start_time=round(seg_start, 2),
-            end_time=round(seg_end, 2),
-            title_en=title_text,
-            title_vi=title_text,
-            start_timecode=start_tc,
-            end_timecode=end_tc,
-        )
-        segments.append(seg)
-        
+
+        title = _extract_spoken_headline(transcript_text, st, et, seen_titles)
+        if not title or count_title_words(title) < TITLE_MIN_WORDS or count_title_words(title) > TITLE_MAX_WORDS:
+            continue
+
+        seen_titles.add(title.lower())
+        segments.append(ViralSegment(
+            index=len(segments) + 1,
+            start_time=st,
+            end_time=et,
+            title_en=title,
+            title_vi=title,
+            start_timecode=f"{int(st//60):02d}:{int(st%60):02d}",
+            end_timecode=f"{int(et//60):02d}:{int(et%60):02d}",
+        ))
+
     return segments
 
 
@@ -1188,19 +1155,19 @@ def _extract_spoken_headline(
                 break
 
     # Nếu transcript thực tế không cung cấp đủ 8 từ thoại -> TRẢ VỀ RỖNG (không tạo title bịa)
-    if len(words) < 8:
+    if len(words) < TITLE_MIN_WORDS:
         return ""
 
-    base_words = words[:10]
-    title = clean_caption_text(" ".join(base_words).upper())
+    selected_words = []
+    for w in words:
+        selected_words.append(w)
+        title_candidate = clean_caption_text(" ".join(selected_words).upper())
+        w_cnt = count_title_words(title_candidate)
+        if TITLE_MIN_WORDS <= w_cnt <= TITLE_MAX_WORDS:
+            if not seen_titles or title_candidate.lower() not in seen_titles:
+                return title_candidate
 
-    # Kiểm tra chống trùng lặp với các tiêu đề đã xuất hiện trước đó
-    if seen_titles and title.lower() in seen_titles:
-        emojis = ["💥", "🔥", "⚡", "😱", "🤯", "😳"]
-        e_idx = int(start_time * 7) % len(emojis)
-        title = clean_caption_text(f"{' '.join(base_words[:9])} {emojis[e_idx]}")
-
-    return title
+    return ""
 
 
 def _convert_raw_segments(
@@ -1252,9 +1219,16 @@ def _convert_raw_segments(
         if outro_offset > 0.0 and video_duration > 0.0:
             max_allowed_end = max(intro_offset + 25.0, video_duration - outro_offset)
             if end_time > max_allowed_end:
-                logger.info(f"Segment {i+1}: end_time={end_time:.1f}s thuộc {outro_offset:.1f}s cuối outro, điều chỉnh về {max_allowed_end:.1f}s")
-                end_time = max_allowed_end
-                start_time = max(intro_offset, end_time - 27.0)
+                if transcript_text:
+                    s_snapped, e_snapped = _snap_to_sentence_boundary(transcript_text, max(intro_offset, end_time - 30.0), max_allowed_end)
+                    if s_snapped >= intro_offset and (e_snapped - s_snapped) >= 20.0:
+                        start_time, end_time = s_snapped, e_snapped
+                    else:
+                        logger.warning(f"Segment {i+1}: end_time vượt quá outro và không snap được boundary hợp lệ, REJECT!")
+                        continue
+                else:
+                    logger.warning(f"Segment {i+1}: end_time thuộc outro_offset, REJECT!")
+                    continue
 
         # Validate
         if end_time <= start_time:
@@ -1332,19 +1306,17 @@ def _convert_raw_segments(
         max_loop_attempts = 8
 
         while True:
-            pure_text = clean_caption_text_for_frame(clean_en)
-            words_en = pure_text.split()
-            word_count = len(words_en)
+            word_count = count_title_words(clean_en)
             has_vi = any(c in clean_en.lower() for c in vi_chars)
             is_duplicate = clean_en.lower() in seen_titles
 
-            if 8 <= word_count <= 10 and not has_vi and not is_duplicate:
+            if TITLE_MIN_WORDS <= word_count <= TITLE_MAX_WORDS and not has_vi and not is_duplicate:
                 # Đạt chuẩn từ 8 đến 10 từ VÀ 100% Tiếng Anh VÀ KHÔNG TRÙNG -> Thoát vòng lặp!
                 break
 
             loop_count += 1
             logger.info(
-                f"Segment {i+1}: Caption '{clean_en}' ({word_count} từ, has_vi={has_vi}, is_duplicate={is_duplicate}) chưa đạt chuẩn 8-10 từ Tiếng Anh độc bản. "
+                f"Segment {i+1}: Caption '{clean_en}' ({word_count} từ, has_vi={has_vi}, is_duplicate={is_duplicate}) chưa đạt chuẩn {TITLE_MIN_WORDS}-{TITLE_MAX_WORDS} từ Tiếng Anh độc bản. "
                 f"Chạy vòng lặp LLM tạo lại caption (lần {loop_count})..."
             )
 
@@ -1355,7 +1327,7 @@ def _convert_raw_segments(
                         f"Rewrite the following video headline into a natural, high-converting Tabloid headline STRICTLY IN ENGLISH for Facebook Reels / TikTok.\n"
                         f"CRITICAL MANDATORY REQUIREMENTS:\n"
                         f"1. MUST BE 100% IN ENGLISH (No Vietnamese words allowed).\n"
-                        f"2. MUST contain STRICTLY between 8 and 10 words (8 <= word_count <= 10). Count words carefully!\n"
+                        f"2. MUST contain STRICTLY between {TITLE_MIN_WORDS} and {TITLE_MAX_WORDS} words ({TITLE_MIN_WORDS} <= word_count <= {TITLE_MAX_WORDS}). Count words carefully!\n"
                         f"3. DO NOT ADD DUMMY FILLER WORDS (e.g. do NOT append 'REVEALED NOW', 'EXPOSED TRUTH', 'TODAY', or 'CLIP NUMBER').\n"
                         f"4. The headline MUST be a single natural, complete sentence.\n"
                         f"Current headline: '{clean_en}'\n"
@@ -1365,14 +1337,14 @@ def _convert_raw_segments(
                     with _LLM_LOCK:
                         new_res = _call_gemini_api(refine_prompt, api_key)
                     new_clean = clean_caption_text(new_res.strip())
-                    new_words = clean_caption_text_for_frame(new_clean).split()
+                    new_words_cnt = count_title_words(new_clean)
                     new_has_vi = any(c in new_clean.lower() for c in vi_chars)
                     new_duplicate = new_clean.lower() in seen_titles
 
-                    if 8 <= len(new_words) <= 10 and not new_has_vi and not new_duplicate:
+                    if TITLE_MIN_WORDS <= new_words_cnt <= TITLE_MAX_WORDS and not new_has_vi and not new_duplicate:
                         clean_en = new_clean
                         refine_success = True
-                        logger.info(f"Segment {i+1}: Vòng lặp LLM đã tạo caption tiếng Anh thành công ({len(new_words)} từ): '{clean_en}'")
+                        logger.info(f"Segment {i+1}: Vòng lặp LLM đã tạo caption tiếng Anh thành công ({new_words_cnt} từ): '{clean_en}'")
                         break
                 except Exception as ex:
                     logger.warning(f"Lỗi gọi LLM trong vòng lặp refine title: {ex}")
@@ -1383,8 +1355,8 @@ def _convert_raw_segments(
 
         # REJECT SEGMENT nếu title rỗng hoặc không nằm trong mốc 8 - 10 từ
         word_cnt = count_title_words(clean_en)
-        if not clean_en or word_cnt < 8 or word_cnt > 10:
-            logger.warning(f"Segment {i+1} ({start_tc}->{end_tc}) bị REJECT do không sinh được tiêu đề hợp lệ 8-10 từ ({word_cnt} từ: '{clean_en}')")
+        if not clean_en or word_cnt < TITLE_MIN_WORDS or word_cnt > TITLE_MAX_WORDS:
+            logger.warning(f"Segment {i+1} ({start_tc}->{end_tc}) bị REJECT do không sinh được tiêu đề hợp lệ {TITLE_MIN_WORDS}-{TITLE_MAX_WORDS} từ ({word_cnt} từ: '{clean_en}')")
             continue
 
         seen_titles.add(clean_en.lower())
@@ -1399,76 +1371,7 @@ def _convert_raw_segments(
             end_timecode=end_tc,
         ))
 
-    # Nếu vẫn chưa đủ max_clips, tìm kiếm bằng Scoring Matrix thực sự
-    if len(segments) < max_clips and transcript_text:
-        valid_start = intro_offset
-        valid_end = max(valid_start + 30.0, (video_duration - outro_offset) if video_duration > 0 else 180.0)
-
-        # Quét candidate windows (27s - 29s) với bước nhảy 10s
-        candidate_windows = []
-        curr = valid_start
-        while curr + 25.0 <= valid_end:
-            c_start = curr
-            c_end = min(valid_end, c_start + 28.0)
-            if c_end - c_start >= 25.0:
-                c_text = _extract_spoken_text_in_range(transcript_text, c_start, c_end)
-                if is_segment_clean_and_valid(transcript_text, c_start, c_end):
-                    score = score_dialogue_quality(c_text)
-                    candidate_windows.append((score, c_start, c_end, c_text))
-            curr += 10.0
-
-        # Sắp xếp candidate theo score giảm dần
-        candidate_windows.sort(key=lambda x: x[0], reverse=True)
-
-        for score, st, et, c_text in candidate_windows:
-            if len(segments) >= max_clips:
-                break
-            if score < 0.8:
-                continue
-
-            # Chống trùng mốc cắt với các segment đã chọn
-            is_overlap = False
-            for prev_seg in segments:
-                if max(0.0, min(et, prev_seg.end_time) - max(st, prev_seg.start_time)) > 0.0:
-                    is_overlap = True
-                    break
-            if is_overlap:
-                continue
-
-            fill_title = ""
-            if api_key:
-                try:
-                    fill_prompt = (
-                        f"Write a catchy 8 to 10 word tabloid headline IN ENGLISH for a dramatic video clip starting at {st:.0f}s.\n"
-                        f"MUST contain strictly between 8 and 10 words (8 <= word_count <= 10).\n"
-                        f"DO NOT use generic text like 'CLIP NUMBER'. End with an emoji 💥.\n"
-                        f"Return ONLY the English headline."
-                    )
-                    with _LLM_LOCK:
-                        res_txt = _call_gemini_api(fill_prompt, api_key)
-                    c_txt = clean_caption_text(res_txt.strip())
-                    w_txt = clean_caption_text_for_frame(c_txt).split()
-                    if 8 <= len(w_txt) <= 10 and c_txt.lower() not in seen_titles:
-                        fill_title = c_txt
-                except Exception as ex:
-                    logger.warning(f"Lỗi khi gọi LLM sinh title cho filler segment {len(segments)+1}: {ex}")
-
-            if not fill_title:
-                fill_title = _extract_spoken_headline(transcript_text, st, et, seen_titles)
-
-            seen_titles.add(fill_title.lower())
-
-            segments.append(ViralSegment(
-                index=len(segments) + 1,
-                start_time=st,
-                end_time=et,
-                title_en=fill_title,
-                title_vi=fill_title,
-                start_timecode=f"{int(st//60):02d}:{int(st%60):02d}",
-                end_timecode=f"{int(et//60):02d}:{int(et%60):02d}",
-            ))
-
-    # KÍCH HOẠT BATCH CAPTION REPAIR (1 API Request duy nhất sửa đồng loạt cả 4 caption nếu có lỗi)
+    # KÍCH HOẠT BATCH CAPTION REPAIR (1 API Request duy nhất sửa đồng loạt các caption nếu có lỗi)
     if api_key and segments:
         segments = _repair_caption_batch(segments, api_key)
 
@@ -1481,15 +1384,15 @@ def _repair_caption_batch(segments: List[ViralSegment], api_key: str) -> List[Vi
     for seg in segments:
         w_count = count_title_words(seg.title_en)
         has_vi = any(c in seg.title_en.lower() for c in "àáảãạăằắẳẵặâầấẩẫậèéẻẽẹêềếểễệìíỉĩịòóỏõọôồốổỗộơờớởỡợùúủũụưừứửữựỳýỷỹỵđ")
-        if w_count < 8 or w_count > 10 or has_vi:
+        if w_count < TITLE_MIN_WORDS or w_count > TITLE_MAX_WORDS or has_vi:
             invalid_segs.append(seg)
 
     if not invalid_segs:
         return segments
 
     logger.warning(
-        f"⚠️ Phát hiện {len(invalid_segs)}/{len(segments)} caption chưa đạt chuẩn (8-10 từ Tiếng Anh). "
-        f"Đang gửi 1 Batch API Request sửa đồng loạt cả 4 caption..."
+        f"⚠️ Phát hiện {len(invalid_segs)}/{len(segments)} caption chưa đạt chuẩn ({TITLE_MIN_WORDS}-{TITLE_MAX_WORDS} từ Tiếng Anh). "
+        f"Đang gửi 1 Batch API Request sửa đồng loạt các caption..."
     )
 
     caption_lines = [f"Clip {s.index}: {s.title_en}" for s in segments]
@@ -1500,7 +1403,7 @@ def _repair_caption_batch(segments: List[ViralSegment], api_key: str) -> List[Vi
         f"TASK:\n"
         f"Rewrite ALL {len(segments)} headlines into high-converting Tabloid Headlines STRICTLY IN ENGLISH.\n\n"
         f"STRICT RULES:\n"
-        f"1. WORD COUNT: EVERY headline MUST have STRICTLY between 8 and 10 English words (8 <= word_count <= 10). Count words carefully!\n"
+        f"1. WORD COUNT: EVERY headline MUST have STRICTLY between {TITLE_MIN_WORDS} and {TITLE_MAX_WORDS} English words ({TITLE_MIN_WORDS} <= word_count <= {TITLE_MAX_WORDS}). Count words carefully!\n"
         f"2. LANGUAGE: 100% English. NO Vietnamese characters allowed.\n"
         f"3. EMOJI: End each headline with 1 relevant expressive emoji (💥, 🔥, ⚡, 📍, 💰, 🚀, 😳, 😱, 🤫).\n"
         f"4. NO DUMMY FILLER WORDS: Do NOT append dummy suffixes like 'REVEALED NOW', 'EXPOSED TRUTH', 'TODAY'. Write natural coherent sentences.\n\n"
@@ -1524,7 +1427,7 @@ def _repair_caption_batch(segments: List[ViralSegment], api_key: str) -> List[Vi
                         if seg.index == idx:
                             from ..utils.graphic_subtitle import clean_caption_text
                             clean_t = clean_caption_text(new_t)
-                            if 8 <= count_title_words(clean_t) <= 10:
+                            if TITLE_MIN_WORDS <= count_title_words(clean_t) <= TITLE_MAX_WORDS:
                                 seg.title_en = clean_t
                                 seg.title_vi = clean_t
                                 logger.info(f"✅ Batch Repair thành công Clip {seg.index}: '{seg.title_en}' ({count_title_words(seg.title_en)} từ)")

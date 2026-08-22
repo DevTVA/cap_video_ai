@@ -63,7 +63,7 @@ def test_dialogue_quality_scoring():
 
 def test_cache_versioning():
     key1 = _get_cache_key("test transcript", 2, None)
-    assert ANALYZER_VERSION == "2.1"
+    assert ANALYZER_VERSION == "2.2"
     assert len(key1) == 64  # SHA-256 hex string
 
 
@@ -75,6 +75,24 @@ def test_deterministic_emoji_reproducibility():
     # Đảm bảo 100% reproducible (cùng text -> cùng emoji)
     assert emoji1 == emoji2
     assert emoji1 is not None
+
+
+def test_censor_preservation_after_clean():
+    from batch_video_cutter.utils.graphic_subtitle import clean_caption_text, censor_sensitive_words
+    text = "SHE HAD SEX AND MURDER IN HER HEAD"
+    censored = censor_sensitive_words(text)
+    assert "SE*" in censored and "MU*DER" in censored
+    cleaned = clean_caption_text(censored)
+    # clean_caption_text không làm mất dấu * trong từ đã censor
+    assert "SE*" in cleaned or "MU*DER" in cleaned
+
+
+def test_no_forced_max_clips_if_low_quality():
+    from batch_video_cutter.core.analyzer import _generate_fallback_segments
+    # Transcript ngắn/nghèo thông tin không ép tạo đủ 4 clips
+    short_transcript = "[00:40] Welcome to the show today\n[00:45] Thank you for watching"
+    segs = _generate_fallback_segments(short_transcript, max_clips=4, video_duration=120.0, intro_offset=35.0, outro_offset=25.0)
+    assert len(segs) < 4
 
 
 def test_subtitle_line_validation():

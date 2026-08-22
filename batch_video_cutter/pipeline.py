@@ -227,14 +227,7 @@ class PipelineOrchestrator:
 
                             # Đảm bảo 100% video Top Caption Badge CHỈ sử dụng Tiếng Anh (title_en)
                             from batch_video_cutter.utils.graphic_subtitle import clean_caption_text
-                            has_vi_chars = lambda s: any(c in str(s).lower() for c in "àáảãạăằắẳẵặâầấẩẫậèéẻẽẹêềếểễệìíỉĩịòóỏõọôồốổỗộơờớởỡợùúủũụưừứửữựỳýỷỹỵđ")
                             title_text_en = clean_caption_text(seg.title_en)
-                            if not title_text_en or has_vi_chars(title_text_en):
-                                clean_en_words = [w for w in re.sub(r"[^\w\s]", "", str(title_text_en)).split() if not has_vi_chars(w) and len(w) > 1]
-                                if clean_en_words:
-                                    title_text_en = clean_caption_text(" ".join(clean_en_words[:10]).upper())
-                                else:
-                                    title_text_en = clean_caption_text("HIGHLIGHT VIRAL SCENE")
 
                             if getattr(style, "get_caption_area", lambda: None)():
                                 from batch_video_cutter.utils.graphic_subtitle import generate_top_caption_layer
@@ -381,13 +374,6 @@ class PipelineOrchestrator:
         for stt, item in enumerate(results_list, 1):
             raw_title_en = item.get('title_en', '') or item.get('title', '')
             cleaned = clean_caption_text(raw_title_en)
-            if not cleaned or has_vi_chars(cleaned):
-                clean_en_words = [w for w in re.sub(r"[^\w\s]", "", str(raw_title_en)).split() if not has_vi_chars(w) and len(w) > 1]
-                if clean_en_words:
-                    cleaned = clean_caption_text(" ".join(clean_en_words[:10]).upper())
-                else:
-                    cleaned = clean_caption_text("HIGHLIGHT VIRAL SCENE")
-            
             clean_title_en = censor_sensitive_words(cleaned).lower()
             
             lines.append(f"[{item['filename']}]")

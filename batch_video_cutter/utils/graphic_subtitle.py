@@ -689,28 +689,6 @@ def censor_sensitive_words(text: str) -> str:
     return result
 
 
-def clean_caption_text(text: str) -> str:
-    """Làm sạch rác LLM (ENGLISH TITLE:, markdown **, chú thích (10 WORDS), nháy thừa, emoji và censor từ nhạy cảm)."""
-    if not text:
-        return ""
-
-    # 1. Bỏ dấu nháy thừa và markdown bold/italic (**text**, *text*, __text__) xung quanh trước
-    text = text.replace("**", "").replace("*", "").replace("__", "").replace("`", "")
-    text = text.replace("’", "'").replace("‘", "'").replace("”", '"').replace("“", '"').replace("—", "-")
-    text = text.strip('"\' ')
-
-    # 2. Loại bỏ tiền tố nhãn rác của LLM (ví dụ: ENGLISH TITLE:, VIETNAMESE TITLE:, TITLE:, CAPTION:, HEADLINE:, TITLE EN:, SEGMENT 2: 01:47..., 1. Viral Segment Time...)
-    text = re.sub(r"^\s*(?:English|Vietnamese)\s+(?:Title|Caption|Headline)\s*[\:\-]?\s*", "", text, flags=re.IGNORECASE)
-    text = re.sub(r"^\s*(?:Title|Caption|Headline)\s*(?:En|Vi)?\s*[\:\-]\s*", "", text, flags=re.IGNORECASE)
-    text = re.sub(r"^\s*(?:English|Vietnamese)\s*[\:\-]\s*", "", text, flags=re.IGNORECASE)
-    text = re.sub(r"^\s*(?:Segment|Clip|Viral Segment)\s*\d*\s*[\:\-]?\s*", "", text, flags=re.IGNORECASE)
-    text = re.sub(r"^\s*\d+[\.\:]\s*", "", text)
-
-    # 3. Loại bỏ các chú thích số từ trong ngoặc đơn/ngoặc vuông từ LLM (ví dụ: (10 WORDS), (8 words), [10 words], (11 SECONDS))
-    text = re.sub(r"\s*[\(\[\{]\s*(?:~?\s*\d+\s*words?|word\s*count.*?|\d+\s*SECONDS?)[\)\]\}]", "", text, flags=re.IGNORECASE)
-    text = re.sub(r"\s*[\(\[\{]\s*\d+\s*TỪ\s*[\)\]\}]", "", text, flags=re.IGNORECASE)
-    text = re.sub(r"\b\d{1,2}:\d{2}\s*[\:\-]\s*\d{1,2}:\d{2}\b", "", text)
-
 class EmojiTracker:
     """Theo dõi vết các emoji đã sử dụng trong phiên làm việc để xoay tua chống trùng lặp."""
     def __init__(self, max_history: int = 15):
@@ -724,9 +702,10 @@ class EmojiTracker:
         if emoji:
             self.history.append(emoji)
 
-    def select_emoji(self, candidate_emojis: List[str]) -> str:
-        """Chọn 1 emoji ngẫu nhiên chưa nằm trong history và có file PNG tồn tại."""
+    def select_emoji(self, candidate_emojis: List[str], seed_text: str = "") -> str:
+        """Chọn 1 emoji có file PNG tồn tại một cách deterministic (deterministic hash)."""
         from .emoji_manager import get_emoji_png_path
+        import hashlib
 
         valid_candidates = []
         for e in candidate_emojis:
@@ -737,11 +716,14 @@ class EmojiTracker:
         if not valid_candidates:
             return "💥"
 
+        h_key = f"{seed_text}_{len(self.history)}"
+        idx = int(hashlib.md5(h_key.encode("utf-8")).hexdigest(), 16)
+
         unused = [e for e in valid_candidates if e not in self.history]
         if unused:
-            chosen = random.choice(unused)
+            chosen = unused[idx % len(unused)]
         else:
-            chosen = random.choice(valid_candidates)
+            chosen = valid_candidates[idx % len(valid_candidates)]
 
         self.add(chosen)
         return chosen
@@ -817,10 +799,10 @@ def ensure_caption_has_emoji(text: str, tracker: Optional[EmojiTracker] = None) 
     t_lower = text_clean.lower()
     for pattern, emoji_list in EMOJIS_KEYWORD_MAP:
         if re.search(pattern, t_lower):
-            chosen = tracker.select_emoji(emoji_list)
+            chosen = tracker.select_emoji(emoji_list, seed_text=text_clean)
             return f"{text_clean} {chosen}".strip() if text_clean else chosen
 
-    chosen_fallback = tracker.select_emoji(GLOBAL_FALLBACK_EMOJIS)
+    chosen_fallback = tracker.select_emoji(GLOBAL_FALLBACK_EMOJIS, seed_text=text_clean)
     return f"{text_clean} {chosen_fallback}".strip() if text_clean else chosen_fallback
 
 
@@ -833,7 +815,8 @@ def clean_caption_text(text: str) -> str:
     existing_emoji = " ".join(emoji_matches) if emoji_matches else ""
     text_no_emoji = EMOJI_AND_FORMAT_PATTERN.sub("", text).strip()
 
-    text = text_no_emoji.replace("**", "").replace("*", "").replace("__", "").replace("`", "")
+    text = re.sub(r"\*{2,}", "", text_no_emoji)
+    text = text.replace("__", "").replace("`", "")
     text = text.replace("’", "'").replace("‘", "'").replace("”", '"').replace("“", '"').replace("—", "-")
     text = text.strip('"\' ')
 
