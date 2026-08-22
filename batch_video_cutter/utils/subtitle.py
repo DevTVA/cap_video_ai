@@ -42,6 +42,32 @@ class SubtitleChunk:
     is_estimated: bool = False
 
 
+class SubtitleChunker:
+    """Single Source of Truth Subtitle Chunker & Layout Processor cho toàn hệ thống."""
+
+    @classmethod
+    def chunk_lines(
+        cls,
+        subtitle_lines: List[SubtitleLine],
+        font,
+        max_width_px: int = 880,
+        max_words_per_chunk: int = 6,
+        max_chars_per_chunk: int = 24,
+        emoji_on_top: bool = True,
+        outcard_start_s: Optional[float] = None,
+    ) -> List[SubtitleChunk]:
+        """Chia SubtitleLine thành danh sách SubtitleChunk chuẩn duy nhất cho cả ASS Subtitle và Graphic Subtitle PNG."""
+        return build_subtitle_chunks(
+            subtitle_lines,
+            font,
+            max_width_px=max_width_px,
+            max_words_per_chunk=max_words_per_chunk,
+            max_chars_per_chunk=max_chars_per_chunk,
+            emoji_on_top=emoji_on_top,
+            outcard_start_s=outcard_start_s,
+        )
+
+
 def build_subtitle_chunks(
     subtitle_lines: List[SubtitleLine],
     font,
@@ -57,7 +83,7 @@ def build_subtitle_chunks(
     - start & end time
     - line1_words & line2_words
     - pre-calculated highlighted_indices (Semantic Highlight Scoring)
-    - deterministic emoji (nếu khớp emotion/keyword, KHÔNG ép emoji cho chunk đầu tiên nếu không khớp)
+    - deterministic emoji theo 4 tầng ưu tiên (Semantic -> Keyword -> Emotion -> Fallback Deterministic MD5)
     """
     from .graphic_subtitle import _select_emphasis_words_in_chunk
 
@@ -98,7 +124,7 @@ def build_subtitle_chunks(
 
             chunk_emoji = None
             if emoji_on_top:
-                chunk_emoji = extract_emoji_for_phrase(chunk_text, fallback_default=False, random_prob=0.0)
+                chunk_emoji = extract_emoji_for_phrase(chunk_text)
 
             chunks.append(SubtitleChunk(
                 start=c_start,
@@ -115,24 +141,47 @@ def build_subtitle_chunks(
     return chunks
 
 
+# Bản đồ Emoji theo Ngữ cảnh / Semantic Phrase
+SEMANTIC_EMOJI_MAP = {
+    "shocking truth": "😱",
+    "unbelievable secret": "🤫",
+    "caught on camera": "📸",
+    "breaking news": "🚨",
+    "must see": "👀",
+    "viral clip": "🔥",
+    "courtroom drama": "⚖️",
+    "police report": "🚔",
+}
+
+
 def extract_emoji_for_phrase(
     phrase_text: str,
     fallback_default: bool = False,
     random_prob: float = 0.0,
     allow_random: bool = False,
 ) -> Optional[str]:
-    """Phân tích cụm từ để chọn Emoji màu sắc phù hợp (Deterministic Mode 100%)."""
+    """Phân tích cụm từ để chọn Emoji màu sắc phù hợp theo 4 tầng ưu tiên:
+    1. Semantic Emoji (Phân tích ngữ nghĩa cụm từ)
+    2. Keyword Match (Khớp từ khóa từ danh mục EMOTION_EMOJI_MAP bằng word boundary)
+    3. Emotion / Punctuation (`?` -> 🤔, `!` -> 🔥, phủ định -> ⚡)
+    4. Fallback Deterministic Match (Chỉ khi allow_random=True hoặc fallback_default=True: dùng MD5 hash của phrase_text chọn emoji nhất quán 100%, 0% random)
+    """
     if not phrase_text:
         return None
-    text_lower = phrase_text.lower()
+    text_lower = phrase_text.lower().strip()
 
-    # 1. Ưu tiên khớp từ khóa trực tiếp bằng word boundary regex
+    # 1. Semantic Match
+    for semantic_phrase, emoji in SEMANTIC_EMOJI_MAP.items():
+        if semantic_phrase in text_lower:
+            return emoji
+
+    # 2. Direct Keyword Match
     for keyword, emoji in EMOTION_EMOJI_MAP.items():
         pattern = r"\b" + re.escape(keyword) + r"\b"
         if re.search(pattern, text_lower):
             return emoji
 
-    # 2. Khớp theo dấu câu hoặc từ phủ định
+    # 3. Emotion / Punctuation Match
     if "?" in phrase_text:
         return "🤔"
     elif "!" in phrase_text:
@@ -143,13 +192,19 @@ def extract_emoji_for_phrase(
             if re.search(p, text_lower):
                 return "⚡"
 
-    # Không ép emoji hoặc chọn ngẫu nhiên nếu không có emotion match
+    # 4. Fallback Deterministic Match (Chỉ khi được opt-in qua allow_random hoặc fallback_default)
+    if allow_random or fallback_default or random_prob > 0.0:
+        import hashlib
+        h = int(hashlib.md5(phrase_text.encode("utf-8")).hexdigest(), 16)
+        idx = h % len(POPULAR_RANDOM_EMOJIS)
+        return POPULAR_RANDOM_EMOJIS[idx]
+
     return None
 
 
 def add_emoji_to_text(text: str) -> str:
     """Thêm emoji sinh động vào câu phụ đề (tương thích ngược)."""
-    res = extract_emoji_for_phrase(text, fallback_default=False, allow_random=False)
+    res = extract_emoji_for_phrase(text)
     return res or "✨"
 
 
@@ -600,52 +655,9 @@ POPULAR_RANDOM_EMOJIS = [
 
 
 def measure_text_width_pixels(text: str, font_name: str = "Impact", font_size: int = 85) -> int:
-    """Đo độ rộng thực tế từng pixel của chuỗi văn bản bằng font nạp từ SubtitleLayoutEngine."""
+    """Đo độ rộng thực tế từng pixel của chuỗi văn bản bằng font nạp từ SubtitleLayoutEngine (Tương thích ngược)."""
     font = SubtitleLayoutEngine.get_font(font_name, font_size)
     return SubtitleLayoutEngine.measure_text_width(text, font)
-
-
-def extract_emoji_for_phrase(
-    phrase_text: str,
-    fallback_default: bool = False,
-    random_prob: float = 0.0,
-    allow_random: bool = False,
-) -> Optional[str]:
-    """Phân tích cụm từ (2-4 từ) để chọn Emoji màu sắc phù hợp (Deterministic Mode mặc định)."""
-    if not phrase_text:
-        return None
-    text_lower = phrase_text.lower()
-
-    # 1. Ưu tiên khớp từ khóa trực tiếp
-    for keyword, emoji in EMOTION_EMOJI_MAP.items():
-        if keyword in text_lower:
-            return emoji
-
-    # 2. Khớp theo dấu câu hoặc từ phủ định
-    if "?" in phrase_text:
-        return "🤔"
-    elif "!" in phrase_text:
-        return "🔥"
-    elif any(w in text_lower for w in ["không", "chưa", "đừng", "not", "don't", "can't", "won't", "no"]):
-        return "⚡"
-
-    # 3. Xuất hiện ngẫu nhiên CHỈ KHI được opt-in (allow_random=True hoặc random_prob > 0)
-    if allow_random and (fallback_default or random_prob > 0):
-        import hashlib
-        h = int(hashlib.md5(phrase_text.encode("utf-8")).hexdigest(), 16)
-        rnd_val = (h % 1000) / 1000.0
-        if fallback_default or rnd_val < random_prob:
-            idx = h % len(POPULAR_RANDOM_EMOJIS)
-            return POPULAR_RANDOM_EMOJIS[idx]
-
-    return None
-
-
-def add_emoji_to_text(text: str) -> str:
-    """Thêm emoji sinh động vào câu phụ đề (tương thích ngược)."""
-    res = extract_emoji_for_phrase(text, fallback_default=True, allow_random=True)
-    return res or "✨"
-
 
 
 def _seconds_to_ass_time(seconds: float) -> str:
@@ -724,51 +736,51 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     timed_emojis: List[tuple] = []
     font = SubtitleLayoutEngine.get_font(font_name, font_size)
 
-    for line_idx, line in enumerate(subtitle_lines):
-        if not line.words:
-            start_time = _seconds_to_ass_time(line.start)
-            end_time = _seconds_to_ass_time(line.end)
-            text_upper = line.text.upper()
-            events.append(f"Dialogue: 0,{start_time},{end_time},Default,,0,0,0,,{text_upper}")
+    chunks = SubtitleChunker.chunk_lines(
+        subtitle_lines,
+        font,
+        max_width_px=880,
+        emoji_on_top=False,
+        outcard_start_s=outcard_start_s,
+    )
+
+    for chunk in chunks:
+        line1_words = chunk.line1_words
+        line2_words = chunk.line2_words
+        all_w = chunk.all_words
+        if not all_w:
             continue
 
-        layout_chunks = SubtitleLayoutEngine.layout_subtitle_line(line, font, max_width_px=880)
+        for active_idx, active_word_info in enumerate(all_w):
+            w_word, w_start, w_end = active_word_info
+            start_time = _seconds_to_ass_time(w_start)
+            end_time = _seconds_to_ass_time(w_end)
 
-        for line1_words, line2_words in layout_chunks:
-            chunk = line1_words + line2_words
-            if not chunk:
-                continue
+            active_color_hex = COLOR_MAP.get(highlight_color_name, COLOR_MAP["yellow"])
 
-            for active_idx, active_word_info in enumerate(chunk):
-                w_word, w_start, w_end = active_word_info
-                start_time = _seconds_to_ass_time(w_start)
-                end_time = _seconds_to_ass_time(w_end)
+            formatted_lines = []
+            l1_formatted = []
+            for idx, (word_text, _, _) in enumerate(line1_words):
+                clean_word = word_text.upper().strip()
+                if idx == active_idx:
+                    l1_formatted.append(f"{{\\c{active_color_hex}}}{clean_word}{{\\r\\c{primary_color}}}")
+                else:
+                    l1_formatted.append(clean_word)
+            if l1_formatted:
+                formatted_lines.append(" ".join(l1_formatted))
 
-                active_color_hex = COLOR_MAP.get(highlight_color_name, COLOR_MAP["yellow"])
+            l2_formatted = []
+            for idx, (word_text, _, _) in enumerate(line2_words, start=len(line1_words)):
+                clean_word = word_text.upper().strip()
+                if idx == active_idx:
+                    l2_formatted.append(f"{{\\c{active_color_hex}}}{clean_word}{{\\r\\c{primary_color}}}")
+                else:
+                    l2_formatted.append(clean_word)
+            if l2_formatted:
+                formatted_lines.append(" ".join(l2_formatted))
 
-                formatted_lines = []
-                l1_formatted = []
-                for idx, (word_text, _, _) in enumerate(line1_words):
-                    clean_word = word_text.upper().strip()
-                    if idx == active_idx:
-                        l1_formatted.append(f"{{\\c{active_color_hex}}}{clean_word}{{\\r\\c{primary_color}}}")
-                    else:
-                        l1_formatted.append(clean_word)
-                if l1_formatted:
-                    formatted_lines.append(" ".join(l1_formatted))
-
-                l2_formatted = []
-                for idx, (word_text, _, _) in enumerate(line2_words, start=len(line1_words)):
-                    clean_word = word_text.upper().strip()
-                    if idx == active_idx:
-                        l2_formatted.append(f"{{\\c{active_color_hex}}}{clean_word}{{\\r\\c{primary_color}}}")
-                    else:
-                        l2_formatted.append(clean_word)
-                if l2_formatted:
-                    formatted_lines.append(" ".join(l2_formatted))
-
-                main_text = "\\N".join(formatted_lines)
-                events.append(f"Dialogue: 0,{start_time},{end_time},Default,,0,0,0,,{main_text}")
+            main_text = "\\N".join(formatted_lines)
+            events.append(f"Dialogue: 0,{start_time},{end_time},Default,,0,0,0,,{main_text}")
 
     content = header + "\n".join(events) + "\n"
     output_path.parent.mkdir(parents=True, exist_ok=True)

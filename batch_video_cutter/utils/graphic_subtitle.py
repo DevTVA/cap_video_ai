@@ -306,7 +306,7 @@ def generate_graphic_subtitles(
     outcard_start_s: Optional[float] = None,
 ) -> List[Tuple[Path, float, float]]:
     """Tạo danh sách các file ảnh PNG phụ đề đồ họa từ các SubtitleChunk chuẩn hóa duy nhất."""
-    from .subtitle import build_subtitle_chunks
+    from .subtitle import SubtitleChunker
 
     tmp_dir = Path(tmp_dir)
     tmp_dir.mkdir(parents=True, exist_ok=True)
@@ -318,7 +318,7 @@ def generate_graphic_subtitles(
     graphic_results: List[Tuple[Path, float, float]] = []
     frame_count = 0
 
-    chunks = build_subtitle_chunks(
+    chunks = SubtitleChunker.chunk_lines(
         subtitle_lines,
         font,
         max_width_px=880,
@@ -355,7 +355,7 @@ def generate_graphic_subtitles(
                 except Exception as e:
                     logger.warning(f"Không thể nạp ảnh emoji {emoji_png_path}: {e}")
 
-        # Xây dựng mốc thời gian Highlight chuẩn word-by-word
+        # Xây dựng mốc thời gian Highlight chuẩn word-by-word (seamless active-word transition gap <= 0.15s)
         time_intervals = []
         n_words = len(all_words)
         for i_w, w_info in enumerate(all_words):
@@ -364,7 +364,7 @@ def generate_graphic_subtitles(
             w_end = round(min(chunk_end, w_end), 4)
             if i_w < n_words - 1:
                 next_start = all_words[i_w + 1][1]
-                if 0.0 < (next_start - w_end) < 0.05:
+                if 0.0 < (next_start - w_end) <= 0.15:
                     w_end = round(next_start, 4)
             if w_end > w_start + 0.01:
                 time_intervals.append(((i_w,), w_start, w_end))
