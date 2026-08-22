@@ -124,7 +124,7 @@ def build_subtitle_chunks(
 
             chunk_emoji = None
             if emoji_on_top:
-                chunk_emoji = extract_emoji_for_phrase(chunk_text)
+                chunk_emoji = extract_emoji_for_phrase(chunk_text, strict_keyword=True)
 
             chunks.append(SubtitleChunk(
                 start=c_start,
@@ -159,12 +159,13 @@ def extract_emoji_for_phrase(
     fallback_default: bool = False,
     random_prob: float = 0.0,
     allow_random: bool = False,
+    strict_keyword: bool = False,
 ) -> Optional[str]:
     """Phân tích cụm từ để chọn Emoji màu sắc phù hợp theo 4 tầng ưu tiên:
     1. Semantic Emoji (Phân tích ngữ nghĩa cụm từ)
     2. Keyword Match (Khớp từ khóa từ danh mục EMOTION_EMOJI_MAP bằng word boundary)
-    3. Emotion / Punctuation (`?` -> 🤔, `!` -> 🔥, phủ định -> ⚡)
-    4. Fallback Deterministic Match (Chỉ khi allow_random=True hoặc fallback_default=True: dùng MD5 hash của phrase_text chọn emoji nhất quán 100%, 0% random)
+    3. Emotion / Punctuation (`?` -> 🤔, `!` -> 🔥, phủ định -> ⚡) (Bỏ qua khi strict_keyword=True)
+    4. Fallback Deterministic Match (Chỉ khi allow_random=True hoặc fallback_default=True)
     """
     if not phrase_text:
         return None
@@ -181,16 +182,17 @@ def extract_emoji_for_phrase(
         if re.search(pattern, text_lower):
             return emoji
 
-    # 3. Emotion / Punctuation Match
-    if "?" in phrase_text:
-        return "🤔"
-    elif "!" in phrase_text:
-        return "🔥"
-    else:
-        neg_patterns = [r"\bkhông\b", r"\bchưa\b", r"\bđừng\b", r"\bnot\b", r"\bdon't\b", r"\bdont\b", r"\bcan't\b", r"\bcant\b", r"\bwon't\b", r"\bwont\b", r"\bno\b"]
-        for p in neg_patterns:
-            if re.search(p, text_lower):
-                return "⚡"
+    # 3. Emotion / Punctuation Match (Chỉ khi strict_keyword=False để tránh SPAM emoji trên mọi câu có dấu câu)
+    if not strict_keyword:
+        if "?" in phrase_text:
+            return "🤔"
+        elif "!" in phrase_text:
+            return "🔥"
+        else:
+            neg_patterns = [r"\bkhông\b", r"\bchưa\b", r"\bđừng\b", r"\bnot\b", r"\bdon't\b", r"\bdont\b", r"\bcan't\b", r"\bcant\b", r"\bwon't\b", r"\bwont\b", r"\bno\b"]
+            for p in neg_patterns:
+                if re.search(p, text_lower):
+                    return "⚡"
 
     # 4. Fallback Deterministic Match (Chỉ khi được opt-in qua allow_random hoặc fallback_default)
     if allow_random or fallback_default or random_prob > 0.0:
@@ -390,24 +392,41 @@ class SubtitleLayoutEngine:
 
     @staticmethod
     def get_font(font_name: str, font_size: int):
-        """Nạp font chuẩn từ assets/fonts/ với fallback minh bạch, không phụ thuộc C:/Windows/Fonts."""
+        """Nạp font chuẩn từ assets/fonts/ hoặc C:/Windows/Fonts/ với fallback minh bạch."""
         from PIL import ImageFont
+        import os
 
-        fonts_dir = Path(__file__).parent.parent / "assets" / "fonts"
         clean_target = font_name.replace(" ", "").replace("-", "").replace("_", "").lower()
 
-        # 1. Quét trong assets/fonts/ trước tiên
-        if fonts_dir.exists():
-            for font_file in fonts_dir.glob("*.ttf"):
-                stem_clean = font_file.stem.replace(" ", "").replace("-", "").replace("_", "").lower()
-                if clean_target in stem_clean or stem_clean in clean_target:
-                    try:
-                        return ImageFont.truetype(str(font_file), font_size)
-                    except Exception:
-                        pass
+        # 1. Thử nạp trực tiếp qua PIL (nếu hệ thống đã cài font hoặc truyền tên/đường dẫn)
+        try:
+            return ImageFont.truetype(font_name, font_size)
+        except Exception:
+            pass
 
-        # 2. Fallback sang các font chất lượng cao sẵn có trong assets/fonts
+        # 2. Quét trong assets/fonts/ và C:/Windows/Fonts/
+        search_dirs = [
+            Path(__file__).parent.parent / "assets" / "fonts",
+            Path(os.environ.get("WINDIR", "C:\\Windows")) / "Fonts",
+            Path("C:/Windows/Fonts"),
+        ]
+
+        for font_dir in search_dirs:
+            if font_dir.exists():
+                for ext in ["*.ttf", "*.otf", "*.ttc", "*.TTF", "*.OTF"]:
+                    for font_file in font_dir.glob(ext):
+                        stem_clean = font_file.stem.replace(" ", "").replace("-", "").replace("_", "").lower()
+                        if clean_target == stem_clean or clean_target in stem_clean or stem_clean in clean_target:
+                            try:
+                                return ImageFont.truetype(str(font_file), font_size)
+                            except Exception:
+                                pass
+
+        # 3. Fallback sang các font chất lượng cao sẵn có trong assets/fonts
+        fonts_dir = Path(__file__).parent.parent / "assets" / "fonts"
         fallback_names = [
+            "Impact.ttf",
+            "impact.ttf",
             "Montserrat-Bold.ttf",
             "LuckiestGuy-Regular.ttf",
             "Fredoka-Bold.ttf",
@@ -422,7 +441,7 @@ class SubtitleLayoutEngine:
                 except Exception:
                     pass
 
-        logger.warning(f"⚠️ Không tìm thấy font '{font_name}' hay font thay thế trong assets/fonts. Dùng PIL Default Font.")
+        logger.warning(f"⚠️ Không tìm thấy font '{font_name}' hay font thay thế trong assets/fonts hoặc Windows Fonts. Dùng PIL Default Font.")
         return ImageFont.load_default()
 
     @classmethod

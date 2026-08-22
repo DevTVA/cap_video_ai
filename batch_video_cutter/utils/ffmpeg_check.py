@@ -130,7 +130,7 @@ def detect_gpu_encoder() -> Optional[str]:
     """Kiểm tra thực tế FFmpeg hỗ trợ và khởi tạo thành công GPU encoder nào (h264_nvenc, h264_amf, h264_qsv)."""
     global _CACHED_ENCODER
     if _CACHED_ENCODER is not None:
-        return _CACHED_ENCODER
+        return _CACHED_ENCODER if _CACHED_ENCODER != "none" else None
 
     try:
         res = subprocess.run(
@@ -157,12 +157,12 @@ def detect_gpu_encoder() -> Optional[str]:
             else:
                 logger.debug(f"GPU encoder {enc} có trong FFmpeg nhưng không khởi tạo được trên phần cứng/driver hiện tại.")
 
-        _CACHED_ENCODER = None
+        _CACHED_ENCODER = "none"
     except Exception as e:
         logger.warning(f"Không thể kiểm tra GPU encoders từ FFmpeg: {e}")
-        _CACHED_ENCODER = None
+        _CACHED_ENCODER = "none"
 
-    return _CACHED_ENCODER
+    return _CACHED_ENCODER if _CACHED_ENCODER != "none" else None
 
 
 def get_best_video_encoder(enable_gpu: bool = True, cpu_preset: str = "superfast") -> tuple[str, list[str]]:
