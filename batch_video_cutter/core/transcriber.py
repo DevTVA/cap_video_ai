@@ -52,12 +52,15 @@ class TranscriptResult:
         language: Ngôn ngữ phát hiện được.
         duration: Tổng thời lượng audio (giây).
         full_text: Toàn bộ text nối lại.
+        has_word_timestamps: Có mốc từ thực tế hay không.
+        timestamp_source: Nguồn mốc thời gian ('whisper' hoặc 'fallback').
     """
     segments: List[SentenceSegment]
     language: str
     duration: float
     full_text: str
     has_word_timestamps: bool = True
+    timestamp_source: str = "whisper"
 
 
 _MODEL_CACHE = {}
@@ -229,6 +232,7 @@ def try_parse_existing_subtitles(video_path: Path) -> Optional[TranscriptResult]
                     duration=duration,
                     full_text=full_text,
                     has_word_timestamps=False,
+                    timestamp_source="fallback",
                 )
         except Exception as e:
             logger.warning(f"Không thể đọc file SRT {srt_file.name}: {e}")
@@ -248,6 +252,7 @@ def try_parse_existing_subtitles(video_path: Path) -> Optional[TranscriptResult]
                     duration=duration,
                     full_text=full_text,
                     has_word_timestamps=False,
+                    timestamp_source="fallback",
                 )
         except Exception as e:
             logger.warning(f"Không thể đọc file subtitles.txt: {e}")
@@ -296,6 +301,7 @@ def align_existing_subtitles_with_whisper(
             seg.words = seg_words
 
         existing_result.has_word_timestamps = True
+        existing_result.timestamp_source = "whisper"
         logger.info(f"  ⚡ [Word Alignment Success] Đã bổ sung {len(whisper_words)} mốc từ audio thực tế cho SRT có sẵn!")
         return existing_result
     except Exception as e:

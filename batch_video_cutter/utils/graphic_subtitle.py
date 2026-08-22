@@ -16,7 +16,7 @@ from typing import List, Tuple, Optional
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 from loguru import logger
 
-from .subtitle import SubtitleLine, extract_emoji_for_phrase, COLOR_MAP
+from .subtitle import SubtitleLine, SubtitleLayoutEngine, extract_emoji_for_phrase, COLOR_MAP
 from .emoji_manager import get_emoji_png_path
 
 
@@ -43,44 +43,8 @@ def _hex_to_rgba(color_str: str) -> Tuple[int, int, int, int]:
 
 @functools.lru_cache(maxsize=32)
 def _get_font(font_name: str, font_size: int) -> ImageFont.FreeTypeFont:
-    """Tải chính xác font Impact CapCut cổ điển kinh điển từ first commit (C:/Windows/Fonts/impact.ttf)."""
-    fonts_dir = Path(__file__).parent.parent / "assets" / "fonts"
-    win_impact = Path("C:/Windows/Fonts/impact.ttf")
-    clean_target = font_name.replace(" ", "").replace("-", "").replace("_", "").lower()
-
-    # 1. Kiểm tra font Impact trong C:/Windows/Fonts trước tiên (Font CapCut bản first commit)
-    if win_impact.exists():
-        try:
-            return ImageFont.truetype(str(win_impact), font_size)
-        except Exception:
-            pass
-
-    # 2. Match các font khác nếu có
-    primary_paths = [
-        fonts_dir / "Montserrat-Bold.ttf",
-        fonts_dir / "LuckiestGuy-Regular.ttf",
-        fonts_dir / "TitanOne-Regular.ttf",
-        fonts_dir / "Fredoka-Bold.ttf",
-        fonts_dir / "Bangers-Regular.ttf",
-    ]
-
-    if fonts_dir.exists():
-        for font_file in fonts_dir.glob("*.ttf"):
-            stem_clean = font_file.stem.replace(" ", "").replace("-", "").replace("_", "").lower()
-            if clean_target in stem_clean or stem_clean in clean_target:
-                try:
-                    return ImageFont.truetype(str(font_file), font_size)
-                except Exception:
-                    pass
-
-    for p in primary_paths:
-        if p and p.exists():
-            try:
-                return ImageFont.truetype(str(p), font_size)
-            except Exception:
-                pass
-
-    return ImageFont.load_default()
+    """Tải font chuẩn thông qua SubtitleLayoutEngine."""
+    return SubtitleLayoutEngine.get_font(font_name, font_size)
 
 
 PUNCTUATION_ENDINGS = (",", ".", "!", "?", ";", ":")
@@ -366,11 +330,10 @@ def generate_graphic_subtitles(
     graphic_results: List[Tuple[Path, float, float]] = []
     frame_count = 0
 
-    # 1. Gom tất cả từ thoại thành 1 luồng từ liên tục (Continuous Word Stream) triệt tiêu trùng lồng mốc thời gian
-    all_words = []
+    # 1. Tạo layout chunks thông qua SubtitleLayoutEngine chuẩn hóa duy nhất 100% đồng bộ với ASS
+    chunks_with_lines = []
     for line in subtitle_lines:
-        words_list = line.words
-        if not words_list and line.text.strip():
+        if not line.words and line.text.strip():
             raw_words = line.text.strip().split()
             if raw_words and line.end > line.start:
                 total_dur = line.end - line.start
@@ -396,28 +359,14 @@ def generate_graphic_subtitles(
                     if w_start < w_end:
                         words_list.append((w, w_start, w_end))
                     curr_t = w_end
-        if words_list:
-            for w in words_list:
-                if w[2] > w[1]:
-                    all_words.append((w[0], round(w[1], 3), round(w[2], 3)))
+                line.words = words_list
 
-    # Sắp xếp tuyệt đối theo thời gian bắt đầu
-    all_words.sort(key=lambda x: (x[1], x[2]))
+        layout_chunks = SubtitleLayoutEngine.layout_subtitle_line(line, font, max_width_px=880)
+        for l1_words, l2_words in layout_chunks:
+            chunks_with_lines.append((l1_words, l2_words))
 
-    # Khử đè lồng mốc thời gian giữa các từ thoại từ Whisper
-    sanitized_words = []
-    for w_text, w_start, w_end in all_words:
-        if sanitized_words:
-            prev_w, prev_s, prev_e = sanitized_words[-1]
-            if w_start < prev_e:
-                w_start = prev_e
-        if w_end > w_start + 0.01:
-            sanitized_words.append((w_text, w_start, w_end))
-
-    # Chia cụm từ luồng thoại liên tục
-    chunks = _split_words_by_rhythm_and_punctuation(sanitized_words, max_words=6, max_chars=24)
-
-    for chunk_idx, chunk in enumerate(chunks):
+    for chunk_idx, (line1_words, line2_words) in enumerate(chunks_with_lines):
+        chunk = line1_words + line2_words
         if not chunk:
             continue
 
@@ -455,10 +404,7 @@ def generate_graphic_subtitles(
                         logger.warning(f"Không thể nạp ảnh emoji {emoji_png_path}: {e}")
                         emoji_img = None
 
-        # Chia chunk làm 2 dòng nếu có từ 3 từ trở lên
-        mid_point = len(chunk) // 2 if len(chunk) >= 3 else len(chunk)
-        line1_words = chunk[:mid_point]
-        line2_words = chunk[mid_point:]
+
 
         # 2. Xây dựng mốc thời gian Highlight Beat Accumulation (Gom từ động theo tốc độ nói)
         time_intervals = []
@@ -973,13 +919,6 @@ def generate_top_caption_layer(
     # Cho cả Canvas 1:1 (Style 3) và Canvas 3:4 (Style 4 & 5), dùng 7-8 từ để hiển thị chuẩn 2 dòng cân đối
     words = ensure_caption_8_to_10_words(title_text, fallback_text, target_min=7, target_max=8)
 
-    # Sử dụng font Montserrat-Bold.ttf cho cả Style 3, Style 5 và Style 4
-    montserrat_path = Path(__file__).parent.parent / "assets" / "fonts" / "Montserrat-Bold.ttf"
-    if montserrat_path.exists():
-        font_path = str(montserrat_path)
-    else:
-        font_path = "C:/Windows/Fonts/arialbd.ttf"
-
     margin_x = 40
     pad_w = 32
     pad_h = 16
@@ -992,10 +931,7 @@ def generate_top_caption_layer(
 
     # Ưu tiên tuyệt đối tìm font size ngắt vừa khít <= 2 dòng cân đối
     for fsize in range(46, 22, -2):
-        try:
-            test_font = ImageFont.truetype(font_path, fsize)
-        except Exception:
-            test_font = ImageFont.load_default()
+        test_font = SubtitleLayoutEngine.get_font("Montserrat-Bold", fsize)
 
         test_lines = format_top_caption_lines(words, test_font, max_text_w)
         overflow = any((test_font.getbbox(l)[2] - test_font.getbbox(l)[0]) > max_text_w for l in test_lines)
@@ -1007,11 +943,7 @@ def generate_top_caption_layer(
 
     if font is None:
         for fsize in range(46, 22, -2):
-            try:
-                test_font = ImageFont.truetype(font_path, fsize)
-            except Exception:
-                test_font = ImageFont.load_default()
-
+            test_font = SubtitleLayoutEngine.get_font("Montserrat-Bold", fsize)
             test_lines = format_top_caption_lines(words, test_font, max_text_w)
             overflow = any((test_font.getbbox(l)[2] - test_font.getbbox(l)[0]) > max_text_w for l in test_lines)
 
@@ -1020,11 +952,8 @@ def generate_top_caption_layer(
                 lines = test_lines
                 break
 
-    if font is None or font == ImageFont.load_default():
-        try:
-            font = ImageFont.truetype(font_path, 26)
-        except Exception:
-            font = ImageFont.load_default()
+    if font is None:
+        font = SubtitleLayoutEngine.get_font("Montserrat-Bold", 26)
         lines = format_top_caption_lines(words, font, max_text_w)
 
     img = Image.new("RGBA", canvas_size, (0, 0, 0, 0))

@@ -19,6 +19,7 @@ class SubtitleLine:
     start: float
     end: float
     words: List[tuple] = None  # [(word, start, end), ...]
+    timestamp_source: str = "whisper"  # "whisper" hoặc "fallback"
 
     def __post_init__(self):
         if self.words is None:
@@ -34,7 +35,7 @@ def validate_subtitle_line(line: SubtitleLine, clip_duration: float = 0.0) -> bo
     """
     if line.start < 0.0 or line.end <= line.start:
         return False
-    if clip_duration > 0.0 and line.end > clip_duration:
+    if clip_duration > 0.0 and line.end > clip_duration + 0.05:
         return False
 
     prev_w_end = line.start
@@ -48,6 +49,183 @@ def validate_subtitle_line(line: SubtitleLine, clip_duration: float = 0.0) -> bo
             prev_w_end = w_end
 
     return True
+
+
+class SubtitleLayoutEngine:
+    """Single Source of Truth Layout Engine cho phụ đề (cả ASS Subtitle và Graphic Subtitle PNG)."""
+
+    @staticmethod
+    def get_font(font_name: str, font_size: int):
+        """Nạp font chuẩn từ assets/fonts hoặc C:/Windows/Fonts với fallback minh bạch."""
+        from PIL import ImageFont
+
+        fonts_dir = Path(__file__).parent.parent / "assets" / "fonts"
+        clean_target = font_name.replace(" ", "").replace("-", "").replace("_", "").lower()
+
+        # 1. Quét trong assets/fonts/ trước tiên
+        if fonts_dir.exists():
+            for font_file in fonts_dir.glob("*.ttf"):
+                stem_clean = font_file.stem.replace(" ", "").replace("-", "").replace("_", "").lower()
+                if clean_target in stem_clean or stem_clean in clean_target:
+                    try:
+                        return ImageFont.truetype(str(font_file), font_size)
+                    except Exception:
+                        pass
+
+        # 2. Kiểm tra C:/Windows/Fonts/impact.ttf nếu yêu cầu Impact
+        if "impact" in clean_target:
+            win_impact = Path("C:/Windows/Fonts/impact.ttf")
+            if win_impact.exists():
+                try:
+                    return ImageFont.truetype(str(win_impact), font_size)
+                except Exception:
+                    pass
+
+        # 3. Fallback sang các font chất lượng cao sẵn có trong assets/fonts
+        fallback_names = [
+            "Montserrat-Bold.ttf",
+            "LuckiestGuy-Regular.ttf",
+            "Fredoka-Bold.ttf",
+            "Bangers-Regular.ttf",
+            "TitanOne-Regular.ttf",
+        ]
+        for f_name in fallback_names:
+            fp = fonts_dir / f_name
+            if fp.exists():
+                try:
+                    return ImageFont.truetype(str(fp), font_size)
+                except Exception:
+                    pass
+
+        logger.warning(f"⚠️ Không tìm thấy font '{font_name}' hay font thay thế trong assets/fonts. Dùng PIL Default Font.")
+        return ImageFont.load_default()
+
+    @classmethod
+    def measure_text_width(cls, text: str, font) -> int:
+        """Đo độ rộng pixel của chuỗi văn bản bằng font chỉ định."""
+        if not text:
+            return 0
+        try:
+            bbox = font.getbbox(text)
+            return bbox[2] - bbox[0]
+        except Exception:
+            return len(text) * 40
+
+    @classmethod
+    def layout_subtitle_line(
+        cls,
+        subtitle_line: SubtitleLine,
+        font,
+        max_width_px: int = 880,
+        max_words_per_chunk: int = 6,
+        max_chars_per_chunk: int = 24,
+    ) -> List[Tuple[List[Tuple[str, float, float]], List[Tuple[str, float, float]]]]:
+        """Chia mốc từ trong SubtitleLine thành các Chunks, mỗi Chunk gồm 2 danh sách dòng [line1_words, line2_words].
+        
+        Trả về: [(line1_words, line2_words), ...]
+        Trong đó line1_words và line2_words là danh sách các tuple (word_text, start, end).
+        
+        Đảm bảo:
+        - 100% giữ nguyên timing mốc từ (word.start, word.end)
+        - Ngắt chunk theo Dấu câu, Khoảng nghỉ (pause > 0.35s), Max words và Pixel width
+        - Tách 2 dòng cân bằng pixel nếu 1 dòng vượt max_width_px
+        """
+        words = subtitle_line.words
+        if not words:
+            return []
+
+        raw_chunks: List[List[Tuple[str, float, float]]] = []
+        curr_chunk: List[Tuple[str, float, float]] = []
+
+        PUNCTUATION_ENDINGS = (",", ".", "!", "?", ";", ":", "-", "...")
+
+        for i, w_info in enumerate(words):
+            w_word, w_start, w_end = w_info[0], w_info[1], w_info[2]
+            curr_chunk.append(w_info)
+
+            chunk_text = " ".join(w[0].strip() for w in curr_chunk)
+            has_punctuation = any(w_word.strip().endswith(p) for p in PUNCTUATION_ENDINGS)
+
+            has_pause = False
+            if i < len(words) - 1:
+                next_start = words[i + 1][1]
+                if next_start - w_end > 0.35:
+                    has_pause = True
+
+            is_max_words = len(curr_chunk) >= max_words_per_chunk
+            is_max_chars = len(chunk_text) >= max_chars_per_chunk
+            is_over_width = cls.measure_text_width(chunk_text, font) >= int(max_width_px * 1.4)
+
+            if has_punctuation or has_pause or is_max_words or is_max_chars or is_over_width:
+                raw_chunks.append(curr_chunk)
+                curr_chunk = []
+
+        if curr_chunk:
+            raw_chunks.append(curr_chunk)
+
+        merged_chunks: List[List[Tuple[str, float, float]]] = []
+        for chunk in raw_chunks:
+            if not merged_chunks:
+                merged_chunks.append(chunk)
+                continue
+
+            prev = merged_chunks[-1]
+            prev_dur = prev[-1][2] - prev[0][1]
+            prev_text = " ".join(w[0].strip() for w in prev)
+            curr_text = " ".join(w[0].strip() for w in chunk)
+
+            combined_words = len(prev) + len(chunk)
+            combined_text = f"{prev_text} {curr_text}"
+            combined_width = cls.measure_text_width(combined_text, font)
+            has_prev_punc = any(prev[-1][0].strip().endswith(p) for p in PUNCTUATION_ENDINGS)
+
+            if (prev_dur < 0.45 or len(prev) <= 2) and not has_prev_punc and combined_words <= max_words_per_chunk and combined_width <= int(max_width_px * 1.3):
+                merged_chunks[-1] = prev + chunk
+            else:
+                merged_chunks.append(chunk)
+
+        final_layout_chunks = []
+        for chunk in merged_chunks:
+            if not chunk:
+                continue
+
+            chunk_text = " ".join(w[0].strip() for w in chunk)
+            chunk_width = cls.measure_text_width(chunk_text, font)
+
+            if len(chunk) <= 2 or chunk_width <= max_width_px:
+                final_layout_chunks.append((chunk, []))
+            else:
+                best_split = len(chunk) // 2
+                best_score = float("inf")
+
+                for k in range(1, len(chunk)):
+                    l1 = chunk[:k]
+                    l2 = chunk[k:]
+                    t1 = " ".join(w[0].strip() for w in l1)
+                    t2 = " ".join(w[0].strip() for w in l2)
+                    w1 = cls.measure_text_width(t1, font)
+                    w2 = cls.measure_text_width(t2, font)
+
+                    penalty = 0.0
+                    if w1 > max_width_px:
+                        penalty += (w1 - max_width_px) * 10.0
+                    if w2 > max_width_px:
+                        penalty += (w2 - max_width_px) * 10.0
+
+                    diff = abs(w1 - w2) + penalty
+
+                    if l1[-1][0].strip().endswith((",", ";", ":")):
+                        diff -= 150.0
+
+                    if diff < best_score:
+                        best_score = diff
+                        best_split = k
+
+                l1_words = chunk[:best_split]
+                l2_words = chunk[best_split:]
+                final_layout_chunks.append((l1_words, l2_words))
+
+        return final_layout_chunks
 
 
 # Bộ Emoji màu sắc đa dạng phong phú theo từ khóa (CapCut Text Your Into Emoji Template)
@@ -284,6 +462,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
     events: List[str] = []
     timed_emojis: List[tuple] = []
+    font = SubtitleLayoutEngine.get_font(font_name, font_size)
 
     for line_idx, line in enumerate(subtitle_lines):
         if not line.words:
@@ -293,11 +472,10 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             events.append(f"Dialogue: 0,{start_time},{end_time},Default,,0,0,0,,{text_upper}")
             continue
 
-        words_list = line.words
-        chunk_size = 4
-        chunks = [words_list[i:i + chunk_size] for i in range(0, len(words_list), chunk_size)]
+        layout_chunks = SubtitleLayoutEngine.layout_subtitle_line(line, font, max_width_px=880)
 
-        for chunk_idx, chunk in enumerate(chunks):
+        for line1_words, line2_words in layout_chunks:
+            chunk = line1_words + line2_words
             if not chunk:
                 continue
 
@@ -306,11 +484,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                 start_time = _seconds_to_ass_time(w_start)
                 end_time = _seconds_to_ass_time(w_end)
 
-                active_color_hex = COLOR_MAP["green"]
-
-                mid_point = len(chunk) // 2 if len(chunk) >= 3 else len(chunk)
-                line1_words = chunk[:mid_point]
-                line2_words = chunk[mid_point:]
+                active_color_hex = COLOR_MAP.get(highlight_color_name, COLOR_MAP["yellow"])
 
                 formatted_lines = []
                 l1_formatted = []
@@ -381,8 +555,11 @@ def create_subtitles_from_transcript(
                 if w_start < w_end:
                     words.append((word_seg.word, w_start, w_end))
 
+        ts_source = "whisper"
         # FALLBACK: Nếu không có mốc từ thực tế từ audio, phân bổ thời lượng theo độ dài từ (Char-Weighted) & khoảng ngắt dấu câu
         if not words and seg.text.strip():
+            ts_source = "fallback"
+            logger.debug("⚠️ Đang sử dụng fallback timestamp cho segment không có mốc từ thực tế.")
             raw_words = seg.text.strip().split()
             if raw_words and relative_end > relative_start:
                 total_dur = relative_end - relative_start
@@ -413,6 +590,7 @@ def create_subtitles_from_transcript(
             start=relative_start,
             end=relative_end,
             words=words,
+            timestamp_source=ts_source,
         ))
 
     return generate_ass_subtitle(
