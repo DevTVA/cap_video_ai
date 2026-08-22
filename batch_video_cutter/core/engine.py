@@ -210,6 +210,7 @@ def cut_and_render_clip(
     cmd = [
         "ffmpeg",
         "-y",
+        "-nostdin",
         "-threads", str(threads),
         *inputs,
         "-t", duration_hms,
@@ -230,6 +231,7 @@ def cut_and_render_clip(
     try:
         process = subprocess.Popen(
             cmd,
+            stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,

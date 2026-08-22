@@ -198,7 +198,7 @@ class PipelineOrchestrator:
                         clip_filename = f"{video_info.folder_name}.{clip_idx}.mp4"
                         output_clip_path = self.bundle_dir / clip_filename
 
-                        with tempfile.TemporaryDirectory() as tmp_dir:
+                        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp_dir:
                             sub_path = Path(tmp_dir) / f"sub_{clip_idx}.ass"
                             sub_position = style.get_subtitle_position()
                             clip_dur = seg.end_time - seg.start_time
