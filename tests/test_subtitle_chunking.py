@@ -58,3 +58,21 @@ def test_punctuation_and_pause_splitting():
 
     chunks = SubtitleLayoutEngine.layout_subtitle_line(line, font, max_width_px=800)
     assert len(chunks) >= 2
+
+
+def test_build_subtitle_chunks_unified():
+    from batch_video_cutter.utils.subtitle import build_subtitle_chunks, SubtitleChunk
+    font = SubtitleLayoutEngine.get_font("Montserrat-Bold", 80)
+
+    line = SubtitleLine(
+        text="I don't know what happened at court today.",
+        start=0.0,
+        end=3.0,
+        words=[],
+    )
+
+    chunks = build_subtitle_chunks([line], font, max_width_px=800, emoji_on_top=True)
+    assert len(chunks) > 0
+    assert isinstance(chunks[0], SubtitleChunk)
+    assert chunks[0].is_estimated is True
+    assert chunks[0].emoji in ["🏛️", "⚡", "🤔", "❌", None]

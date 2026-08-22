@@ -305,104 +305,65 @@ def generate_graphic_subtitles(
     position: str = "bottom",
     outcard_start_s: Optional[float] = None,
 ) -> List[Tuple[Path, float, float]]:
-    """Tạo danh sách các file ảnh PNG phụ đề đồ họa (Mặc định TRẮNG cho cụm < 4 từ, Karaoke 1 từ cho cụm >= 4 từ)."""
+    """Tạo danh sách các file ảnh PNG phụ đề đồ họa từ các SubtitleChunk chuẩn hóa duy nhất."""
+    from .subtitle import build_subtitle_chunks
+
     tmp_dir = Path(tmp_dir)
     tmp_dir.mkdir(parents=True, exist_ok=True)
 
     font = _get_font(font_name, font_size)
-    primary_rgba = (255, 255, 255, 255) # Mặc định TRẮNG TƯƠI cho tất cả từ
-
-    # Mặc định XANH LÁ NEON (Green #00FF00) cố định 100% cho tất cả các phong cách theo yêu cầu
+    primary_rgba = (255, 255, 255, 255)
     highlight_rgba = (0, 255, 0, 255)
 
     graphic_results: List[Tuple[Path, float, float]] = []
     frame_count = 0
 
-    # 1. Tạo layout chunks thông qua SubtitleLayoutEngine chuẩn hóa duy nhất 100% đồng bộ với ASS
-    chunks_with_lines = []
-    for line in subtitle_lines:
-        if not line.words and line.text.strip():
-            raw_words = line.text.strip().split()
-            if raw_words and line.end > line.start:
-                total_dur = line.end - line.start
+    chunks = build_subtitle_chunks(
+        subtitle_lines,
+        font,
+        max_width_px=880,
+        emoji_on_top=emoji_on_top,
+        outcard_start_s=outcard_start_s,
+    )
 
-                def _calc_word_weight(w: str) -> float:
-                    clean_w = re.sub(r"[^\w]", "", w)
-                    weight = max(1.0, float(len(clean_w)))
-                    if w.endswith((",", ";", ":")):
-                        weight += 1.5
-                    elif w.endswith((".", "!", "?")):
-                        weight += 2.5
-                    return weight
+    total_words = 0
+    estimated_words = 0
+    highlighted_count = 0
+    emoji_count = 0
 
-                weights = [_calc_word_weight(w) for w in raw_words]
-                total_weight = sum(weights) if sum(weights) > 0 else 1.0
+    for chunk in chunks:
+        chunk_start = chunk.start
+        chunk_end = chunk.end
+        line1_words = chunk.line1_words
+        line2_words = chunk.line2_words
+        all_words = chunk.all_words
 
-                curr_t = line.start
-                words_list = []
-                for i, w in enumerate(raw_words):
-                    w_dur = (weights[i] / total_weight) * total_dur
-                    w_start = curr_t
-                    w_end = min(line.end, curr_t + w_dur)
-                    if w_start < w_end:
-                        words_list.append((w, w_start, w_end))
-                    curr_t = w_end
-                line.words = words_list
+        total_words += len(all_words)
+        if chunk.is_estimated:
+            estimated_words += len(all_words)
+        if chunk.highlighted_indices:
+            highlighted_count += len(chunk.highlighted_indices)
 
-        layout_chunks = SubtitleLayoutEngine.layout_subtitle_line(line, font, max_width_px=880)
-        for l1_words, l2_words in layout_chunks:
-            chunks_with_lines.append((l1_words, l2_words))
-
-    for chunk_idx, (line1_words, line2_words) in enumerate(chunks_with_lines):
-        chunk = line1_words + line2_words
-        if not chunk:
-            continue
-
-        chunk_start = chunk[0][1]
-        chunk_end = chunk[-1][2]
-
-        # Xóa sạch phụ đề ở khoảng thời gian Outcard cuối video
-        if outcard_start_s is not None:
-            if chunk_start >= outcard_start_s:
-                continue
-            chunk_end = min(chunk_end, outcard_start_s)
-
-        if chunk_start >= chunk_end:
-            continue
-
-        # Chỉ chọn 1 từ nhấn mạnh NẾU cụm dài >= 4 từ
-        emphasis_indices = _select_emphasis_words_in_chunk(chunk)
-
-        # Xác định Emoji màu 3D
-        chunk_emoji = None
         emoji_img = None
-        if emoji_on_top:
-            chunk_text = " ".join(w[0] for w in chunk)
-            chunk_emoji = extract_emoji_for_phrase(chunk_text, fallback_default=False, random_prob=0.0)
-            if not chunk_emoji and chunk_idx == 0:
-                chunk_emoji = extract_emoji_for_phrase(chunk_text, fallback_default=False, allow_random=False)
+        if chunk.emoji:
+            emoji_png_path = get_emoji_png_path(chunk.emoji)
+            if emoji_png_path and Path(emoji_png_path).exists():
+                try:
+                    emoji_img = Image.open(emoji_png_path).convert("RGBA")
+                    emoji_img = emoji_img.resize((65, 65), Image.Resampling.LANCZOS)
+                    emoji_count += 1
+                except Exception as e:
+                    logger.warning(f"Không thể nạp ảnh emoji {emoji_png_path}: {e}")
 
-            if chunk_emoji:
-                emoji_png_path = get_emoji_png_path(chunk_emoji)
-                if emoji_png_path and Path(emoji_png_path).exists():
-                    try:
-                        emoji_img = Image.open(emoji_png_path).convert("RGBA")
-                        emoji_img = emoji_img.resize((65, 65), Image.Resampling.LANCZOS)
-                    except Exception as e:
-                        logger.warning(f"Không thể nạp ảnh emoji {emoji_png_path}: {e}")
-                        emoji_img = None
-
-
-
-        # 2. Xây dựng mốc thời gian Highlight chuẩn word-by-word từ timestamp gốc
+        # Xây dựng mốc thời gian Highlight chuẩn word-by-word
         time_intervals = []
-        n_words = len(chunk)
-        for i_w, w_info in enumerate(chunk):
+        n_words = len(all_words)
+        for i_w, w_info in enumerate(all_words):
             w_start, w_end = w_info[1], w_info[2]
             w_start = round(max(chunk_start, w_start), 4)
             w_end = round(min(chunk_end, w_end), 4)
             if i_w < n_words - 1:
-                next_start = chunk[i_w + 1][1]
+                next_start = all_words[i_w + 1][1]
                 if 0.0 < (next_start - w_end) < 0.05:
                     w_end = round(next_start, 4)
             if w_end > w_start + 0.01:
@@ -411,9 +372,7 @@ def generate_graphic_subtitles(
         if not time_intervals:
             time_intervals = [(None, chunk_start, chunk_end)]
 
-        # Cache frame composite để tránh render lặp
         rendered_frames = {}
-
         for active_emph_idx, interval_s, interval_e in time_intervals:
             if outcard_start_s is not None:
                 if interval_s >= outcard_start_s:
@@ -425,7 +384,7 @@ def generate_graphic_subtitles(
 
             if active_emph_idx not in rendered_frames:
                 rendered_frames[active_emph_idx] = _render_single_chunk_frame(
-                    chunk=chunk,
+                    chunk=all_words,
                     line1_words=line1_words,
                     line2_words=line2_words,
                     active_emphasis_indices=active_emph_idx,
@@ -483,6 +442,7 @@ def generate_graphic_subtitles(
 
         graphic_results = final_list
 
+    logger.info(f"Subtitle Stats: subtitle_words={total_words}, estimated_words={estimated_words}, subtitle_chunks={len(chunks)}, highlighted_words={highlighted_count}, emoji_count={emoji_count}")
     logger.info(f"Đã tạo {len(graphic_results)} khung ảnh phụ đề đồ họa PNG Super-Sampling 2X (tổng số PNG: {len(graphic_results)}) mượt căng tại {tmp_dir}")
     return graphic_results
 

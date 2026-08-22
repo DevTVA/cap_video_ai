@@ -19,11 +19,137 @@ class SubtitleLine:
     start: float
     end: float
     words: List[tuple] = None  # [(word, start, end), ...]
-    timestamp_source: str = "whisper"  # "whisper" hoặc "fallback"
+    timestamp_source: str = "whisper"  # "whisper" hoặc "fallback" / "estimated"
+    is_estimated: bool = False
 
     def __post_init__(self):
         if self.words is None:
             self.words = []
+
+
+@dataclass
+class SubtitleChunk:
+    """Cấu trúc dữ liệu trung gian chuẩn hóa cho 1 chunk phụ đề (Single Source of Truth)."""
+    start: float
+    end: float
+    line1_words: List[Tuple[str, float, float]]
+    line2_words: List[Tuple[str, float, float]]
+    all_words: List[Tuple[str, float, float]]
+    text: str
+    highlighted_indices: set
+    emoji: Optional[str] = None
+    is_estimated: bool = False
+
+
+def build_subtitle_chunks(
+    subtitle_lines: List[SubtitleLine],
+    font,
+    max_width_px: int = 880,
+    max_words_per_chunk: int = 6,
+    max_chars_per_chunk: int = 24,
+    emoji_on_top: bool = True,
+    outcard_start_s: Optional[float] = None,
+) -> List[SubtitleChunk]:
+    """Single Source of Truth xây dựng danh sách SubtitleChunk cho cả ASS Subtitle và Graphic Subtitle PNG.
+    
+    Mỗi chunk bao gồm:
+    - start & end time
+    - line1_words & line2_words
+    - pre-calculated highlighted_indices (Semantic Highlight Scoring)
+    - deterministic emoji (nếu khớp emotion/keyword, KHÔNG ép emoji cho chunk đầu tiên nếu không khớp)
+    """
+    from .graphic_subtitle import _select_emphasis_words_in_chunk
+
+    chunks: List[SubtitleChunk] = []
+
+    for line in subtitle_lines:
+        if not line.words and line.text.strip():
+            line.words = estimate_word_timings(line.text, line.start, line.end)
+            line.is_estimated = True
+            line.timestamp_source = "estimated"
+
+        layout_chunks = SubtitleLayoutEngine.layout_subtitle_line(
+            line,
+            font,
+            max_width_px=max_width_px,
+            max_words_per_chunk=max_words_per_chunk,
+            max_chars_per_chunk=max_chars_per_chunk,
+        )
+
+        for l1_words, l2_words in layout_chunks:
+            all_w = l1_words + l2_words
+            if not all_w:
+                continue
+
+            c_start = all_w[0][1]
+            c_end = all_w[-1][2]
+
+            if outcard_start_s is not None:
+                if c_start >= outcard_start_s:
+                    continue
+                c_end = min(c_end, outcard_start_s)
+
+            if c_start >= c_end:
+                continue
+
+            chunk_text = " ".join(w[0] for w in all_w)
+            emphasis_idx = _select_emphasis_words_in_chunk(all_w)
+
+            chunk_emoji = None
+            if emoji_on_top:
+                chunk_emoji = extract_emoji_for_phrase(chunk_text, fallback_default=False, random_prob=0.0)
+
+            chunks.append(SubtitleChunk(
+                start=c_start,
+                end=c_end,
+                line1_words=l1_words,
+                line2_words=l2_words,
+                all_words=all_w,
+                text=chunk_text,
+                highlighted_indices=emphasis_idx,
+                emoji=chunk_emoji,
+                is_estimated=line.is_estimated,
+            ))
+
+    return chunks
+
+
+def extract_emoji_for_phrase(
+    phrase_text: str,
+    fallback_default: bool = False,
+    random_prob: float = 0.0,
+    allow_random: bool = False,
+) -> Optional[str]:
+    """Phân tích cụm từ để chọn Emoji màu sắc phù hợp (Deterministic Mode 100%)."""
+    if not phrase_text:
+        return None
+    text_lower = phrase_text.lower()
+
+    # 1. Ưu tiên khớp từ khóa trực tiếp bằng word boundary regex
+    for keyword, emoji in EMOTION_EMOJI_MAP.items():
+        pattern = r"\b" + re.escape(keyword) + r"\b"
+        if re.search(pattern, text_lower):
+            return emoji
+
+    # 2. Khớp theo dấu câu hoặc từ phủ định
+    if "?" in phrase_text:
+        return "🤔"
+    elif "!" in phrase_text:
+        return "🔥"
+    else:
+        neg_patterns = [r"\bkhông\b", r"\bchưa\b", r"\bđừng\b", r"\bnot\b", r"\bdon't\b", r"\bdont\b", r"\bcan't\b", r"\bcant\b", r"\bwon't\b", r"\bwont\b", r"\bno\b"]
+        for p in neg_patterns:
+            if re.search(p, text_lower):
+                return "⚡"
+
+    # Không ép emoji hoặc chọn ngẫu nhiên nếu không có emotion match
+    return None
+
+
+def add_emoji_to_text(text: str) -> str:
+    """Thêm emoji sinh động vào câu phụ đề (tương thích ngược)."""
+    res = extract_emoji_for_phrase(text, fallback_default=False, allow_random=False)
+    return res or "✨"
 
 
 def estimate_word_timings(

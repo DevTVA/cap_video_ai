@@ -82,3 +82,21 @@ def test_ensure_caption_has_emoji_deterministic():
 
     assert res1 == res2
     assert res1.endswith(("💰", "💵", "⚖️", "📜", "🏛️", "💥", "🔥", "💳", "🤑", "😡", "🚨", "⚡", "🥊", "💣"))
+
+
+def test_no_forced_emoji_on_first_chunk():
+    from batch_video_cutter.utils.subtitle import build_subtitle_chunks, SubtitleLayoutEngine, SubtitleLine
+    font = SubtitleLayoutEngine.get_font("Montserrat-Bold", 80)
+
+    # Completely neutral phrase without mapped keywords
+    line = SubtitleLine(
+        text="The system is processing the status report",
+        start=0.0,
+        end=2.0,
+        words=[("The", 0.0, 0.3), ("system", 0.3, 0.6), ("is", 0.6, 0.8), ("processing", 0.8, 1.3), ("the", 1.3, 1.5), ("status", 1.5, 1.7), ("report", 1.7, 2.0)],
+    )
+
+    chunks = build_subtitle_chunks([line], font, max_width_px=800, emoji_on_top=True)
+    assert len(chunks) > 0
+    # Neutral chunk should NOT force emoji
+    assert chunks[0].emoji is None
