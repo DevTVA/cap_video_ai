@@ -14,7 +14,7 @@ import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 from loguru import logger
 
@@ -231,6 +231,42 @@ def is_intro_or_monologue_line(text: str) -> bool:
         if ik in t_lower:
             return True
     return False
+
+
+def _snap_to_sentence_boundary(transcript_text: str, start_time: float, end_time: float) -> Tuple[float, float]:
+    """Tìm ranh giới câu thoại thực tế gần nhất trong transcript để snap start_time và end_time."""
+    if not transcript_text:
+        return start_time, end_time
+
+    best_start = start_time
+    best_end = end_time
+    min_start_diff = 999.0
+    min_end_diff = 999.0
+
+    # Parse timestamps dạng [mm:ss - mm:ss] hoặc [mm:ss]
+    pattern = re.compile(r"\[(\d+):(\d+)(?:\s*-\s*(\d+):(\d+))?\]")
+    for line in transcript_text.splitlines():
+        match = pattern.search(line)
+        if match:
+            s_min, s_sec = int(match.group(1)), int(match.group(2))
+            t_start = s_min * 60.0 + s_sec
+            if match.group(3) and match.group(4):
+                e_min, e_sec = int(match.group(3)), int(match.group(4))
+                t_end = e_min * 60.0 + e_sec
+            else:
+                t_end = t_start + 3.0
+
+            diff_s = abs(t_start - start_time)
+            if diff_s < min_start_diff and diff_s <= 5.0:
+                min_start_diff = diff_s
+                best_start = t_start
+
+            diff_e = abs(t_end - end_time)
+            if diff_e < min_end_diff and diff_e <= 5.0:
+                min_end_diff = diff_e
+                best_end = t_end
+
+    return best_start, best_end
 
 
 def is_segment_clean_and_valid(transcript_text: str, start_time: float, end_time: float) -> bool:
@@ -1151,19 +1187,11 @@ def _extract_spoken_headline(
             if len(words) >= 15:
                 break
 
-    default_word_pools = [
-        ["UNEXPECTED", "DRAMATIC", "COURTROOM", "TESTIMONY", "LEAVES", "EVERYONE", "SPEECHLESS"],
-        ["SHOCKING", "TRUTH", "REVEALED", "DURING", "INTENSE", "CROSS", "EXAMINATION"],
-        ["WITNESS", "CONFESSION", "TURNS", "THE", "ENTIRE", "TRIAL", "UPSIDE", "DOWN"],
-        ["HEATED", "ARGUMENT", "ESCALATES", "INTO", "UNBELIEVABLE", "DRAMATIC", "MOMENT"],
-        ["SURPRISING", "REVELATION", "STUNS", "THE", "COURTROOM", "IN", "SILENCE"],
-    ]
+    # Nếu transcript thực tế không cung cấp đủ 8 từ thoại -> TRẢ VỀ RỖNG (không tạo title bịa)
+    if len(words) < 8:
+        return ""
 
-    pool_idx = int(start_time + end_time) % len(default_word_pools)
-    base_words = words[:10] if len(words) >= 8 else default_word_pools[pool_idx]
-    if len(base_words) > 10:
-        base_words = base_words[:10]
-
+    base_words = words[:10]
     title = clean_caption_text(" ".join(base_words).upper())
 
     # Kiểm tra chống trùng lặp với các tiêu đề đã xuất hiện trước đó
@@ -1234,14 +1262,22 @@ def _convert_raw_segments(
             continue
 
         duration = end_time - start_time
-        if duration < 25.0 or duration > 29.0:
-            logger.info(
-                f"Segment {i+1}: duration={duration:.1f}s ngoài 25-29s, điều chỉnh về 27s"
-            )
-            if duration < 25.0:
-                end_time = start_time + 27.0
-            elif duration > 29.0:
-                end_time = start_time + 28.5
+        # Nếu duration quá lệch (< 20s hoặc > 35s), reject ngay không kéo mù
+        if duration < 20.0 or duration > 35.0:
+            logger.warning(f"Segment {i+1}: duration={duration:.1f}s quá lệch (ngoài 20s-35s), REJECT candidate!")
+            continue
+
+        # Nếu duration chưa nằm trong mốc chuẩn 25-29s, thực hiện Snap về ranh giới câu thoại thực tế
+        if (duration < 25.0 or duration > 29.0) and transcript_text:
+            s_snapped, e_snapped = _snap_to_sentence_boundary(transcript_text, start_time, end_time)
+            d_snapped = e_snapped - s_snapped
+            if 24.5 <= d_snapped <= 29.5:
+                start_time, end_time = s_snapped, e_snapped
+                duration = d_snapped
+                logger.info(f"Segment {i+1}: Đã snap về ranh giới câu thoại thực tế ({start_time:.1f}s -> {end_time:.1f}s, duration={duration:.1f}s)")
+            else:
+                logger.warning(f"Segment {i+1}: duration={duration:.1f}s sau khi snap ({d_snapped:.1f}s) vẫn không đạt mốc chuẩn 25-29s, REJECT!")
+                continue
 
         if video_duration > 0 and end_time > video_duration:
             logger.warning(
@@ -1342,10 +1378,14 @@ def _convert_raw_segments(
                     logger.warning(f"Lỗi gọi LLM trong vòng lặp refine title: {ex}")
 
             if not refine_success:
-                # Trích xuất thoại tự nhiên từ transcript làm fallback sinh động thay vì dùng chuỗi tĩnh hardcode
+                # Trích xuất thoại tự nhiên từ transcript thực tế (không bịa title)
                 clean_en = _extract_spoken_headline(transcript_text, start_time, end_time, seen_titles)
-                if loop_count >= max_loop_attempts:
-                    break
+
+        # REJECT SEGMENT nếu title rỗng hoặc không nằm trong mốc 8 - 10 từ
+        word_cnt = count_title_words(clean_en)
+        if not clean_en or word_cnt < 8 or word_cnt > 10:
+            logger.warning(f"Segment {i+1} ({start_tc}->{end_tc}) bị REJECT do không sinh được tiêu đề hợp lệ 8-10 từ ({word_cnt} từ: '{clean_en}')")
+            continue
 
         seen_titles.add(clean_en.lower())
 

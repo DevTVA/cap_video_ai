@@ -25,6 +25,31 @@ class SubtitleLine:
             self.words = []
 
 
+def validate_subtitle_line(line: SubtitleLine, clip_duration: float = 0.0) -> bool:
+    """Kiểm tra tính hợp lệ mốc thời gian dòng phụ đề và word-level timestamps:
+    - start >= 0
+    - end > start
+    - end <= clip_duration (nếu clip_duration > 0)
+    - không có word timestamp bị overlap hoặc start >= end
+    """
+    if line.start < 0.0 or line.end <= line.start:
+        return False
+    if clip_duration > 0.0 and line.end > clip_duration:
+        return False
+
+    prev_w_end = line.start
+    for w in line.words:
+        if len(w) >= 3:
+            _, w_start, w_end = w[0], w[1], w[2]
+            if w_start < 0.0 or w_end <= w_start:
+                return False
+            if w_start < prev_w_end - 0.001:  # Allow 1ms rounding tolerance
+                return False
+            prev_w_end = w_end
+
+    return True
+
+
 # Bộ Emoji màu sắc đa dạng phong phú theo từ khóa (CapCut Text Your Into Emoji Template)
 EMOTION_EMOJI_MAP = {
     # Cảm xúc & Trạng thái

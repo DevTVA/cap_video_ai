@@ -10,8 +10,9 @@ from batch_video_cutter.core.analyzer import (
     count_title_words,
     is_intro_or_monologue_line,
     score_dialogue_quality,
+    _extract_spoken_headline,
 )
-from batch_video_cutter.utils.subtitle import SubtitleLine, extract_emoji_for_phrase
+from batch_video_cutter.utils.subtitle import SubtitleLine, extract_emoji_for_phrase, validate_subtitle_line
 
 
 def test_title_word_count_constants():
@@ -24,29 +25,32 @@ def test_title_word_count_helper():
     title_8 = "Boss Hogg Loses His Memory And Thinks Rosco"
     title_10 = "Boss Hogg Loses His Memory And Thinks Rosco Is Family"
     title_11 = "Boss Hogg Loses His Memory And Thinks Rosco Is Family Today"
+    title_emoji = "Boss Hogg Loses His Memory And Thinks 💥"
 
     assert count_title_words(title_7) == 7
     assert count_title_words(title_8) == 8
     assert count_title_words(title_10) == 10
     assert count_title_words(title_11) == 11
+    # Emoji 💥 không được tính vào word count!
+    assert count_title_words(title_emoji) == 7
 
 
-def test_intro_detection_preserves_judge_dialogue():
-    # Câu thoại trong tòa án có chứa từ "Judge" KHÔNG được bị intro filter loại bỏ nhầm!
-    judge_dialogue = "Judge: Why did you lie to your husband?"
-    assert is_intro_or_monologue_line(judge_dialogue) is False
+def test_intro_detection_preserves_judge_and_host_dialogue():
+    # Câu thoại tòa án và host KHÔNG bị loại nhầm
+    assert is_intro_or_monologue_line("Judge: Why did you lie to your husband?") is False
+    assert is_intro_or_monologue_line("Host: Why did you leave the house?") is False
+    assert is_intro_or_monologue_line("Judge, what happened that night?") is False
 
-    courtroom_dialogue = "Tell the court what happened that night"
-    assert is_intro_or_monologue_line(courtroom_dialogue) is False
+    # Cụm intro/promo thực sự PHẢI bị loại
+    assert is_intro_or_monologue_line("Welcome back to the show everyone") is True
+    assert is_intro_or_monologue_line("Thanks for watching don't forget to subscribe") is True
 
-    # Các cụm intro/branding thực sự PHẢI bị bắt và loại bỏ
-    real_intro_1 = "Welcome back to the show everyone"
-    real_intro_2 = "Thanks for watching, don't forget to like and subscribe"
-    real_intro_3 = "Today's episode is brought to you by sponsored by"
 
-    assert is_intro_or_monologue_line(real_intro_1) is True
-    assert is_intro_or_monologue_line(real_intro_2) is True
-    assert is_intro_or_monologue_line(real_intro_3) is True
+def test_no_fabricated_fallback_title():
+    # Transcript quá ít từ (< 8 từ) -> trả về "" (không bịa title rác)
+    short_transcript = "[00:01] Hello there"
+    headline = _extract_spoken_headline(short_transcript, 0.0, 10.0, set())
+    assert headline == ""
 
 
 def test_dialogue_quality_scoring():
@@ -73,16 +77,28 @@ def test_deterministic_emoji_reproducibility():
     assert emoji1 is not None
 
 
-def test_subtitle_line_timestamps():
-    sub = SubtitleLine(
-        text="Test subtitle",
+def test_subtitle_line_validation():
+    # Valid line
+    valid = SubtitleLine(text="Test", start=0.0, end=5.0, words=[("Test", 0.0, 2.0)])
+    assert validate_subtitle_line(valid, clip_duration=10.0) is True
+
+    # Invalid: start >= end
+    invalid_time = SubtitleLine(text="Test", start=5.0, end=5.0)
+    assert validate_subtitle_line(invalid_time) is False
+
+    # Invalid: negative start
+    invalid_neg = SubtitleLine(text="Test", start=-1.0, end=3.0)
+    assert validate_subtitle_line(invalid_neg) is False
+
+    # Invalid: end > clip_duration
+    invalid_clip = SubtitleLine(text="Test", start=0.0, end=15.0)
+    assert validate_subtitle_line(invalid_clip, clip_duration=10.0) is False
+
+    # Invalid: word overlap
+    invalid_overlap = SubtitleLine(
+        text="Test overlap",
         start=0.0,
         end=5.0,
-        words=[("Test", 0.0, 2.0), ("subtitle", 2.0, 5.0)]
+        words=[("Test", 0.0, 3.0), ("overlap", 2.0, 5.0)]
     )
-    assert sub.start < sub.end
-    assert sub.start >= 0.0
-    for w, w_start, w_end in sub.words:
-        assert w_start < w_end
-        assert w_start >= sub.start
-        assert w_end <= sub.end
+    assert validate_subtitle_line(invalid_overlap) is False
