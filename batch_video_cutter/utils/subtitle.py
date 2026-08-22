@@ -553,7 +553,8 @@ class SubtitleLayoutEngine:
             chunk_text = " ".join(w[0].strip() for w in chunk)
             chunk_width = cls.measure_text_width(chunk_text, font)
 
-            if len(chunk) <= 2 or chunk_width <= max_width_px:
+            # Ưu tiên ngắt phụ đề thành 2 dòng cân bằng (2-Line Stacked Subtitle) khi cụm từ có 3 từ trở lên
+            if len(chunk) <= 2:
                 final_layout_chunks.append((chunk, []))
             else:
                 best_split = len(chunk) // 2
