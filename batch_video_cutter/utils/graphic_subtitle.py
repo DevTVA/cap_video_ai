@@ -7,17 +7,44 @@ and pastes HD Color 3D PNG Emojis directly to the right of the period on a trans
 Ensures 100% frame-accurate timing and exact pixel positioning.
 """
 
+import os
 import re
 import random
+import hashlib
 import functools
 from collections import deque
 from pathlib import Path
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Dict
+from concurrent.futures import ThreadPoolExecutor
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 from loguru import logger
 
 from .subtitle import SubtitleLine, SubtitleLayoutEngine, extract_emoji_for_phrase, COLOR_MAP
 from .emoji_manager import get_emoji_png_path
+
+# Global in-memory cache for chunk base layers
+_CHUNK_BASE_CACHE: Dict[str, Tuple[Image.Image, List[Tuple[str, int, int, int]], int]] = {}
+RENDERER_VERSION = "base-layer-v2"
+
+
+def compute_multi_factor_cache_key(
+    text_norm: str,
+    font_name: str,
+    font_size: int,
+    primary_rgba: Tuple[int, int, int, int],
+    canvas_size: Tuple[int, int],
+    margin_v: int,
+    position: str,
+    emoji: str,
+    renderer_version: str = RENDERER_VERSION,
+) -> str:
+    """Compute strict multi-factor cache key for chunk base layers."""
+    raw_key = (
+        f"{text_norm}|{font_name}|{font_size}|{primary_rgba}|"
+        f"{canvas_size[0]}x{canvas_size[1]}|{margin_v}|{position}|"
+        f"emoji={emoji}|v={renderer_version}"
+    )
+    return hashlib.sha256(raw_key.encode("utf-8")).hexdigest()
 
 
 def _hex_to_rgba(color_str: str) -> Tuple[int, int, int, int]:
@@ -319,43 +346,78 @@ def generate_graphic_subtitles(
     highlighted_count = 0
     emoji_count = 0
 
-    for chunk in chunks:
-        chunk_start = chunk.start
-        chunk_end = chunk.end
-        line1_words = chunk.line1_words
-        line2_words = chunk.line2_words
-        all_words = chunk.all_words
+    # Step 1: Multi-factor Cache Key Lookup & Bounded Parallel Pre-rendering for Cache Misses
+    chunk_cache_keys = []
+    miss_items = []
 
+    for chunk in chunks:
+        all_words = chunk.all_words
         total_words += len(all_words)
         if chunk.is_estimated:
             estimated_words += len(all_words)
         if chunk.highlighted_indices:
             highlighted_count += len(chunk.highlighted_indices)
 
-        emoji_img = None
-        if chunk.emoji:
-            emoji_png_path = get_emoji_png_path(chunk.emoji)
-            if emoji_png_path and Path(emoji_png_path).exists():
-                try:
-                    emoji_img = Image.open(emoji_png_path).convert("RGBA")
-                    emoji_img = emoji_img.resize((65, 65), Image.Resampling.LANCZOS)
-                    emoji_count += 1
-                except Exception as e:
-                    logger.warning(f"Không thể nạp ảnh emoji {emoji_png_path}: {e}")
-
-        # Pre-render 1X base composite image ONCE for the entire chunk
-        base_1x, word_positions_1x, eff_font_size = _render_chunk_base_layer(
-            line1_words=line1_words,
-            line2_words=line2_words,
+        l1_text = " ".join(w[0] for w in chunk.line1_words) if chunk.line1_words else ""
+        l2_text = " ".join(w[0] for w in chunk.line2_words) if chunk.line2_words else ""
+        text_norm = f"{l1_text}|{l2_text}"
+        c_key = compute_multi_factor_cache_key(
+            text_norm=text_norm,
+            font_name=font_name,
             font_size=font_size,
             primary_rgba=primary_rgba,
             canvas_size=canvas_size,
             margin_v=margin_v,
             position=position,
-            emoji_img=emoji_img,
-            font_name=font_name,
+            emoji=chunk.emoji or "",
         )
+        chunk_cache_keys.append(c_key)
+        if c_key not in _CHUNK_BASE_CACHE:
+            miss_items.append((c_key, chunk))
 
+    if miss_items:
+        max_workers = min(os.cpu_count() or 4, 4)
+
+        def _render_task(item):
+            k, c = item
+            emoji_img = None
+            if c.emoji:
+                emoji_png_path = get_emoji_png_path(c.emoji)
+                if emoji_png_path and Path(emoji_png_path).exists():
+                    try:
+                        emoji_img = Image.open(emoji_png_path).convert("RGBA")
+                        emoji_img = emoji_img.resize((65, 65), Image.Resampling.LANCZOS)
+                    except Exception as err:
+                        logger.warning(f"Không thể nạp ảnh emoji {emoji_png_path}: {err}")
+            b_1x, w_pos_1x, eff_sz = _render_chunk_base_layer(
+                line1_words=c.line1_words,
+                line2_words=c.line2_words,
+                font_size=font_size,
+                primary_rgba=primary_rgba,
+                canvas_size=canvas_size,
+                margin_v=margin_v,
+                position=position,
+                emoji_img=emoji_img,
+                font_name=font_name,
+            )
+            return k, b_1x, w_pos_1x, eff_sz, bool(emoji_img)
+
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            results = executor.map(_render_task, miss_items)
+            for k, b_1x, w_pos_1x, eff_sz, had_emoji in results:
+                _CHUNK_BASE_CACHE[k] = (b_1x, w_pos_1x, eff_sz)
+                if had_emoji:
+                    emoji_count += 1
+
+    # Step 2: Render active word interval frames from cached base layers
+    for i_chunk, chunk in enumerate(chunks):
+        chunk_start = chunk.start
+        chunk_end = chunk.end
+        all_words = chunk.all_words
+        c_key = chunk_cache_keys[i_chunk]
+
+        cached_base_1x, word_positions_1x, eff_font_size = _CHUNK_BASE_CACHE[c_key]
+        base_1x = cached_base_1x.copy()
         font_1x = _get_font(font_name, eff_font_size)
 
         # Xây dựng mốc thời gian Highlight chuẩn word-by-word
@@ -407,6 +469,10 @@ def generate_graphic_subtitles(
             out_png_path = tmp_dir / f"g_sub_{frame_count:04d}.png"
             composite.save(out_png_path, "PNG", compress_level=1)
             graphic_results.append((out_png_path, interval_s, interval_e))
+
+        # Explicit reference release to keep RAM bounded
+        del base_1x
+        del rendered_frames
 
         sanitized = []
         graphic_results.sort(key=lambda x: (x[1], x[2]))
