@@ -126,22 +126,18 @@ def _select_emphasis_words_in_chunk(chunk: List[Tuple[str, float, float]]) -> se
     return {best_idx}
 
 
-def _render_single_chunk_frame(
-    chunk: List[Tuple[str, float, float]],
-    line1_words: List[Tuple[str, float, float]],
-    line2_words: List[Tuple[str, float, float]],
-    active_emphasis_indices: Optional[tuple] = None,
-    font: ImageFont.FreeTypeFont = None,
+def _render_chunk_base_layer(
+    line1_words: List[tuple],
+    line2_words: List[tuple],
     font_size: int = 66,
     primary_rgba: Tuple[int, int, int, int] = (255, 255, 255, 255),
-    highlight_rgba: Tuple[int, int, int, int] = (0, 255, 0, 255),
     canvas_size: Tuple[int, int] = (1080, 1080),
     margin_v: int = 180,
     position: str = "bottom",
     emoji_img: Optional[Image.Image] = None,
     font_name: str = "Impact",
-) -> Image.Image:
-    """Render 1 frame PNG với 2X Super-Sampling Anti-Aliasing, Phóng to từ nhấn 1.15X & Dynamic 3D Emoji Pop-Up chuẩn CapCut Pro."""
+) -> Tuple[Image.Image, List[Tuple[str, int, int, int]], int]:
+    """Tạo ảnh base 1X (gồm Drop Shadow + Black Stroke + Text Trắng + Emoji 3D) và vị trí từ 1X ONCE per chunk."""
     scale = 2
     canvas_2x = (canvas_size[0] * scale, canvas_size[1] * scale)
     font_size_2x = font_size * scale
@@ -162,12 +158,13 @@ def _render_single_chunk_frame(
     bbox2 = font_2x.getbbox(l2_text) if l2_text else (0, 0, 0, 0)
     l2_width = bbox2[2] - bbox2[0]
 
-    # Tự động thu nhỏ font chữ nếu bề ngang câu vượt quá giới hạn an toàn (chừa sẵn lề cho Emoji 3D)
     max_allowed_text_w = canvas_2x[0] - (360 if emoji_img else 200)
     max_line_w = max(l1_width, l2_width)
+    eff_font_size = font_size
     if max_line_w > max_allowed_text_w and max_line_w > 0:
         scale_factor = max_allowed_text_w / float(max_line_w)
         font_size_2x = max(int(font_size_2x * scale_factor), 40)
+        eff_font_size = max(int(font_size * scale_factor), 20)
         font_2x = _get_font(font_name, font_size_2x)
         bbox1 = font_2x.getbbox(l1_text) if l1_text else (0, 0, 0, 0)
         l1_width = bbox1[2] - bbox1[0]
@@ -179,15 +176,14 @@ def _render_single_chunk_frame(
         y1 = 45 * scale
         y2 = y1 + font_size_2x + 10 * scale
     else:
-        # Cố định mốc y2 (dòng đáy) làm lề chân tĩnh tuyệt đối, chống rung giật nhảy 140px lên xuống
         y2 = canvas_2x[1] - eff_margin_v - font_size_2x - 20 * scale
         y1 = y2 - font_size_2x - 10 * scale
         if not l2_text:
-            # Nếu cụm chỉ có 1 dòng, luôn đặt dòng chữ đó ở đúng mốc y2 để lề chân tĩnh 100%
             y1 = y2
 
     last_line_end_x = canvas_2x[0] // 2
     last_line_y = y1
+    word_positions = []
 
     # --- Render Dòng 1 ---
     if l1_text:
@@ -197,26 +193,22 @@ def _render_single_chunk_frame(
             if not clean_w:
                 continue
 
-            is_active = (idx in active_emphasis_indices) if active_emphasis_indices else False
-            current_font = font_2x
-            color = highlight_rgba if is_active else primary_rgba
             stroke_w = max(12, int(14 * (font_size / 66.0)))
             y_pos = y1
+            word_positions.append((clean_w, x_cursor // scale, y_pos // scale, idx))
 
-            # Soft Drop Shadow 2X
             shadow_draw.text(
                 (x_cursor + 8, y_pos + 8),
                 clean_w,
-                font=current_font,
+                font=font_2x,
                 fill=(0, 0, 0, 200),
                 stroke_width=stroke_w,
                 stroke_fill=(0, 0, 0, 200),
             )
-            # Text chính 2X
             text_draw.text(
                 (x_cursor, y_pos),
                 clean_w,
-                font=current_font,
+                font=font_2x,
                 fill=(0, 0, 0, 255),
                 stroke_width=stroke_w,
                 stroke_fill=(0, 0, 0, 255),
@@ -224,11 +216,11 @@ def _render_single_chunk_frame(
             text_draw.text(
                 (x_cursor, y_pos),
                 clean_w,
-                font=current_font,
-                fill=color,
+                font=font_2x,
+                fill=primary_rgba,
                 stroke_width=0,
             )
-            w_box = current_font.getbbox(clean_w + " ")
+            w_box = font_2x.getbbox(clean_w + " ")
             x_cursor += (w_box[2] - w_box[0])
 
         last_line_end_x = x_cursor
@@ -242,16 +234,14 @@ def _render_single_chunk_frame(
             if not clean_w:
                 continue
 
-            is_active = (idx in active_emphasis_indices) if active_emphasis_indices else False
-            current_font = font_2x
-            color = highlight_rgba if is_active else primary_rgba
             stroke_w = max(12, int(14 * (font_size / 66.0)))
             y_pos = y2
+            word_positions.append((clean_w, x_cursor // scale, y_pos // scale, idx))
 
             shadow_draw.text(
                 (x_cursor + 8, y_pos + 8),
                 clean_w,
-                font=current_font,
+                font=font_2x,
                 fill=(0, 0, 0, 200),
                 stroke_width=stroke_w,
                 stroke_fill=(0, 0, 0, 200),
@@ -259,7 +249,7 @@ def _render_single_chunk_frame(
             text_draw.text(
                 (x_cursor, y_pos),
                 clean_w,
-                font=current_font,
+                font=font_2x,
                 fill=(0, 0, 0, 255),
                 stroke_width=stroke_w,
                 stroke_fill=(0, 0, 0, 255),
@@ -267,17 +257,16 @@ def _render_single_chunk_frame(
             text_draw.text(
                 (x_cursor, y_pos),
                 clean_w,
-                font=current_font,
-                fill=color,
+                font=font_2x,
+                fill=primary_rgba,
                 stroke_width=0,
             )
-            w_box = current_font.getbbox(clean_w + " ")
+            w_box = font_2x.getbbox(clean_w + " ")
             x_cursor += (w_box[2] - w_box[0])
 
         last_line_end_x = x_cursor
         last_line_y = y2
 
-    # Dán HD Color Emoji 3D 2X tĩnh ở cuối câu cho toàn bộ thời lượng cụm
     if emoji_img:
         emoji_2x = emoji_img.resize((135, 135), Image.Resampling.LANCZOS)
         emoji_x = min(canvas_2x[0] - 145, last_line_end_x + 12)
@@ -286,10 +275,9 @@ def _render_single_chunk_frame(
 
     shadow_img = shadow_img.filter(ImageFilter.GaussianBlur(6))
     composite_2x = Image.alpha_composite(shadow_img, text_img)
-
-    # Thu nhỏ Super-Sampling 2X -> 1X bằng Lanczos để đạt độ mịn tròn nét tuyệt đối
     composite_1x = composite_2x.resize(canvas_size, Image.Resampling.LANCZOS)
-    return composite_1x
+
+    return composite_1x, word_positions, eff_font_size
 
 
 def generate_graphic_subtitles(
@@ -355,7 +343,22 @@ def generate_graphic_subtitles(
                 except Exception as e:
                     logger.warning(f"Không thể nạp ảnh emoji {emoji_png_path}: {e}")
 
-        # Xây dựng mốc thời gian Highlight chuẩn word-by-word (seamless active-word transition gap <= 0.15s)
+        # Pre-render 1X base composite image ONCE for the entire chunk
+        base_1x, word_positions_1x, eff_font_size = _render_chunk_base_layer(
+            line1_words=line1_words,
+            line2_words=line2_words,
+            font_size=font_size,
+            primary_rgba=primary_rgba,
+            canvas_size=canvas_size,
+            margin_v=margin_v,
+            position=position,
+            emoji_img=emoji_img,
+            font_name=font_name,
+        )
+
+        font_1x = _get_font(font_name, eff_font_size)
+
+        # Xây dựng mốc thời gian Highlight chuẩn word-by-word
         time_intervals = []
         n_words = len(all_words)
         for i_w, w_info in enumerate(all_words):
@@ -383,26 +386,26 @@ def generate_graphic_subtitles(
                 continue
 
             if active_emph_idx not in rendered_frames:
-                rendered_frames[active_emph_idx] = _render_single_chunk_frame(
-                    chunk=all_words,
-                    line1_words=line1_words,
-                    line2_words=line2_words,
-                    active_emphasis_indices=active_emph_idx,
-                    font=font,
-                    font_size=font_size,
-                    primary_rgba=primary_rgba,
-                    highlight_rgba=highlight_rgba,
-                    canvas_size=canvas_size,
-                    margin_v=margin_v,
-                    position=position,
-                    emoji_img=emoji_img,
-                    font_name=font_name,
-                )
+                if not active_emph_idx:
+                    rendered_frames[active_emph_idx] = base_1x
+                else:
+                    frame_img = base_1x.copy()
+                    frame_draw = ImageDraw.Draw(frame_img)
+                    for clean_w, x_1x, y_1x, idx in word_positions_1x:
+                        if idx in active_emph_idx:
+                            frame_draw.text(
+                                (x_1x, y_1x),
+                                clean_w,
+                                font=font_1x,
+                                fill=highlight_rgba,
+                                stroke_width=0,
+                            )
+                    rendered_frames[active_emph_idx] = frame_img
 
             composite = rendered_frames[active_emph_idx]
             frame_count += 1
             out_png_path = tmp_dir / f"g_sub_{frame_count:04d}.png"
-            composite.save(out_png_path, "PNG")
+            composite.save(out_png_path, "PNG", compress_level=1)
             graphic_results.append((out_png_path, interval_s, interval_e))
 
         sanitized = []
