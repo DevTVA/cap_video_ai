@@ -5,7 +5,7 @@
 """
 
 from typing import Optional, Tuple
-from .base import BaseStyle, CaptionArea
+from .base import BaseStyle, CaptionArea, HIGHLIGHT_COLOR_GREEN
 
 
 class Style3(BaseStyle):
@@ -84,8 +84,8 @@ class Style3(BaseStyle):
         return "bottom"
 
     def get_highlight_color(self) -> str:
-        """Màu Highlight MÀU ĐỎ ("red")."""
-        return "red"
+        """Màu Highlight MÀU XANH LÁ (HIGHLIGHT_COLOR_GREEN)."""
+        return HIGHLIGHT_COLOR_GREEN
 
     def get_font_size(self) -> int:
         """Cỡ font 54pt vừa vặn cho Style 3 Canvas 1:1."""

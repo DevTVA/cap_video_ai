@@ -5,12 +5,20 @@ Khi tôi gửi transcript có timestamp, hãy chọn ra các phân đoạn hay n
 
 Quy tắc chọn đoạn:
 
-* Mỗi đoạn phải dài khoảng 29 giây.
+* Mỗi đoạn phải dài khoảng 25 đến 29 giây.
 * Không chọn quá dài nếu tôi không yêu cầu.
-* QUY TẮC CẤM INTRO & LỜI DẪN SHOW / MC (BẮT BUỘC): TUYỆT ĐỐI KHÔNG chọn bất kỳ đoạn nào chứa lời giới thiệu kênh/show, lời chào mở đầu (welcome to the show, welcome back, today's episode, brought to you by...), phần giới thiệu MC/khách mời, đoạn ngắt nghỉ station ID, hoặc lời thuyết minh 1 người (monologue) Ở BẤT KỲ THỜI ĐIỂM NÀO trong video. CHỈ chọn các phân đoạn có ĐỐI THOẠI TRỰC TIẾP giữa 2 người trở lên (ví dụ: Luật sư & Nhân chứng, Thẩm phán & Bị cáo, Hỏi & Đáp Q&A, Phỏng vấn, Tranh luận kịch tính).
-* Ưu tiên đoạn có tình huống hài hước, hiểu lầm, plot twist, karma, câu thoại gây cười, nhân vật bị “quê”, hoặc cao trào dễ giữ chân người xem.
-* Với show hài/roast/variety: chọn đoạn gây cười rõ nhất, có câu punchline mạnh.
-* Với phim/drama: chọn đoạn có cảm xúc, bí mật, căng thẳng hoặc cliffhanger, nhưng không tiết lộ hết kết quả.
+* QUY TẮC BẮT BUỘC - HOOK 3 GIÂY ĐẦU (FIRST 3-SECOND HOOK):
+  - Câu thoại mở đầu của phân đoạn (trong 3 giây đầu tiên) BẮT BUỘC phải là một cú HOOK cực mạnh để giữ chân người xem:
+    + Phát ngôn gây sốc, nhận định gây tranh cãi mạnh hoặc khẳng định bất ngờ.
+    + Câu hỏi kích thích tò mò tột độ (Curiosity Gap) khiến người xem phải xem hết clip để biết kết quả.
+    + Cao trào cảm xúc, phản ứng giật gân, plot twist hoặc tình huống trớ trêu.
+  - TUYỆT ĐỐI KHÔNG bắt đầu đoạn bằng từ đệm ậm ừ ("uhm", "well", "so", "như tôi đã nói"...), khoảng lặng hoặc câu chuyển đoạn nhạt nhẽo.
+* QUY TẮC CẤM INTRO & CHÀO HỎI KÊNH (BẮT BUỘC):
+  - TUYỆT ĐỐI KHÔNG chọn bất kỳ đoạn nào chứa lời giới thiệu kênh/show, lời chào mở đầu (welcome to the show, welcome back, today's episode, brought to you by, hôm nay chúng ta sẽ...), phần giới thiệu MC/khách mời, kêu gọi like/subscribe, đoạn ngắt nghỉ station ID hoặc quảng cáo tài trợ Ở BẤT KỲ THỜI ĐIỂM NÀO trong video.
+* ÁP DỤNG THEO THỂ LOẠI NỘI DUNG:
+  - Với Show Review (phim, xe, đồ công nghệ, ẩm thực, v.v.): Chọn phân đoạn reviewer đưa ra nhận định đanh thép, bóc mẽ khuyết điểm, so sánh đối nghịch gay gắt, khen/chê bùng nổ hoặc tiết lộ chi tiết bất ngờ nhất.
+  - Với Phim / Drama / Tòa án (Courtroom) / Phỏng vấn: CHỈ chọn các đoạn có ĐỐI THOẠI TRỰC TIẾP giữa 2 người trở lên (Luật sư & Nhân chứng, Thẩm phán & Bị cáo, Hỏi & Đáp kịch tính, Tranh luận bẻ gãy lập luận).
+  - Với Show hài / Roast / Variety: Chọn đoạn gây cười rõ nhất, có câu punchline mạnh làm nhân vật bị "quê".
 * Tránh chọn đoạn quá nhạy cảm, xúc phạm chủng tộc, giới tính, tôn giáo, chính trị cực đoan, bạo lực quá mức hoặc dễ vi phạm tiêu chuẩn cộng đồng Facebook.
 
 

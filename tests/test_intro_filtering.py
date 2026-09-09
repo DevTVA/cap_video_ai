@@ -15,6 +15,10 @@ def test_is_intro_or_monologue_line():
         "Don't forget to subscribe to our channel!",
         "Xin chào tất cả các bạn đã quay trở lại với kênh.",
         "Today on the show we have a special guest.",
+        "All rise for the honorable judge Judy!",
+        "Court is now in session, presiding judge Mathis.",
+        "Today on Judge Mathis, a fierce battle over rent money.",
+        "Order in the court, in the court of Judge Hatchett.",
     ]
     for line in intro_lines:
         assert is_intro_or_monologue_line(line) is True, f"Failed for: {line}"
@@ -24,6 +28,7 @@ def test_is_intro_or_monologue_line():
         "I was standing right next to the car when it happened.",
         "Did you see who fired the weapon?",
         "No Your Honor, I had no knowledge of this deal.",
+        "Judge, I didn't steal the money from her account.",
     ]
     for line in normal_dialogue_lines:
         assert is_intro_or_monologue_line(line) is False, f"Failed for: {line}"

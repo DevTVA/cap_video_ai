@@ -1,22 +1,22 @@
-"""Style 5: Canvas 1:1 (1080x1080) Dải Nền Xanh Dương + Top Impact Title + Subtitle Highlight Vàng:
+"""Style 5: Canvas 1:1 (1080x1080) Dải Nền Xanh Dương + Top Impact Title + Subtitle Highlight Xanh Lá:
 - Top Caption: Dải Nền Xanh Dương (Royal Blue RGB 41, 67, 150, 180px), Chữ Impact màu TRẮNG tinh Viết Hoa kèm stroke đen 3px.
 - Video Stream: Canvas 1:1 (1080x1080), Video zoom 150% CapCut style đặt từ y=180px đến y=1080px (giống Style 3).
-- Graphic Subtitles: Font Impact CapCut (66pt), Active Word Highlight VÀNG ("yellow").
+- Graphic Subtitles: Font Impact CapCut (66pt), Active Word Highlight XANH LÁ (HIGHLIGHT_COLOR_GREEN chuẩn Style 3).
 """
 
 from typing import Optional, Tuple
-from .base import BaseStyle, CaptionArea
+from .base import BaseStyle, CaptionArea, HIGHLIGHT_COLOR_GREEN
 
 
 class Style5(BaseStyle):
-    """Phong cách 5: Canvas 1:1 Dải Nền Xanh Dương Tiêu Đề Chữ Trắng Impact + Highlight Vàng."""
+    """Phong cách 5: Canvas 1:1 Dải Nền Xanh Dương Tiêu Đề Chữ Trắng Impact + Highlight Xanh Lá (Chuẩn Style 3)."""
 
     CAPTION_HEIGHT_RATIO = 0.1667  # 180px / 1080px
     style_index: int = 5
 
     @property
     def name(self) -> str:
-        return "Style 5 - 1:1 Canvas + Top Blue Banner White Impact Title + Yellow Highlight Subtitle"
+        return "Style 5 - 1:1 Canvas + Top Blue Banner White Impact Title + Green Highlight Subtitle"
 
     @property
     def aspect_ratio(self) -> str:
@@ -84,8 +84,8 @@ class Style5(BaseStyle):
         return "bottom"
 
     def get_highlight_color(self) -> str:
-        """Màu Highlight MÀU VÀNG ("yellow")."""
-        return "yellow"
+        """Màu Highlight MÀU XANH LÁ (HIGHLIGHT_COLOR_GREEN chuẩn Style 3)."""
+        return HIGHLIGHT_COLOR_GREEN
 
     def get_font_size(self) -> int:
         """Cỡ font 66pt bằng cỡ chữ Style 1 chuẩn đẹp."""
@@ -99,5 +99,5 @@ class Style5(BaseStyle):
         return False
 
     def get_max_clips(self) -> Optional[int]:
-        """Phong cách 5 cắt 3 đoạn viral."""
-        return 3
+        """Phong cách 5 cắt 2 đoạn viral."""
+        return 2

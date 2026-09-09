@@ -11,6 +11,7 @@ import functools
 import json
 import re
 import tempfile
+import time
 from pathlib import Path
 from typing import List, Dict, Optional
 from loguru import logger
@@ -21,6 +22,7 @@ from .core.scanner import scan_videos, VideoInfo
 from .core.transcriber import transcribe_video, format_transcript_for_llm, cleanup_whisper_model
 from .core.analyzer import analyze_transcript, load_prompt_template, ViralSegment
 from .core.engine import cut_and_render_clip
+from .core.telemetry import ClipTelemetry
 from .styles.factory import parse_style_mapping, resolve_style_for_folder
 from .utils.subtitle import create_subtitles_from_transcript
 from .utils.ffmpeg_check import check_ffmpeg
@@ -144,9 +146,12 @@ class PipelineOrchestrator:
                     loop = asyncio.get_running_loop()
                     transcript = await loop.run_in_executor(
                         None,
-                        transcribe_video,
-                        video_info.path,
-                        self.config.whisper_model,
+                        functools.partial(
+                            transcribe_video,
+                            video_info.path,
+                            model_name=self.config.whisper_model,
+                            subtitle_align=getattr(self.config, "subtitle_align", "auto"),
+                        ),
                     )
 
                 if not transcript.segments:
@@ -191,12 +196,47 @@ class PipelineOrchestrator:
                     progress_bar.update(1)
                     return
 
-                video_results = []
+                if len(segments) < max_clips:
+                    if len(segments) < 2:
+                        logger.warning(
+                            f"EXPLICIT INSUFFICIENT SEGMENTS WARNING: Folder [{video_info.folder_name}] "
+                            f"chỉ tìm thấy {len(segments)} clip hợp lệ (mục tiêu {max_clips}). Tiến hành render các clip sẵn có."
+                        )
+                    else:
+                        logger.info(f"Folder [{video_info.folder_name}] có {len(segments)}/{max_clips} clips hợp lệ.")
                 # 4. Render các clip song song
                 async def render_single_clip(clip_idx: int, seg: ViralSegment) -> dict:
                     async with self.render_semaphore:
                         clip_filename = f"{video_info.folder_name}.{clip_idx}.mp4"
                         output_clip_path = self.bundle_dir / clip_filename
+
+                        # Đảm bảo 100% video Top Caption Badge CHỈ sử dụng Tiếng Anh (title_en)
+                        from batch_video_cutter.utils.graphic_subtitle import clean_caption_text
+                        title_text_en = clean_caption_text(seg.title_en)
+
+                        # Smart Skip: Bỏ qua render nếu clip thành phẩm hợp lệ đã tồn tại trên đĩa (>100KB)
+                        if not getattr(self.config, "force_rerender", False) and output_clip_path.exists() and output_clip_path.stat().st_size > 100_000:
+                            logger.info(f"⚡ [Smart Skip] Clip thành phẩm đã tồn tại ({output_clip_path.stat().st_size / 1024:.1f} KB), bỏ qua render: {clip_filename}")
+                            return {
+                                "filename": clip_filename,
+                                "title_en": title_text_en,
+                                "title_vi": seg.title_vi or "",
+                                "title": title_text_en,
+                                "folder_name": video_info.folder_name,
+                                "start_time": seg.start_time,
+                                "end_time": seg.end_time,
+                                "reason": getattr(seg, "reason", ""),
+                            }
+
+                        telemetry = ClipTelemetry(
+                            folder_name=video_info.folder_name,
+                            clip_idx=clip_idx,
+                            clip_filename=clip_filename,
+                            duration_sec=seg.end_time - seg.start_time,
+                            style_name=style.name,
+                            align_mode=getattr(self.config, "subtitle_align", "auto"),
+                            timestamp_source=getattr(transcript, "timestamp_source", "whisper"),
+                        )
 
                         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp_dir:
                             sub_path = Path(tmp_dir) / f"sub_{clip_idx}.ass"
@@ -205,6 +245,7 @@ class PipelineOrchestrator:
                             outcard_start_s = max(0.0, clip_dur - 2.113)
 
                             # Tạo subtitles chuẩn theo style với độ phân giải canvas chuẩn xác và lề dưới linh hoạt
+                            t_align_start = time.perf_counter()
                             sub_path, timed_emojis = await loop.run_in_executor(
                                 None,
                                 functools.partial(
@@ -224,12 +265,10 @@ class PipelineOrchestrator:
                                     margin_v=getattr(style, "get_margin_v", lambda: 110)(),
                                 )
                             )
-
-                            # Đảm bảo 100% video Top Caption Badge CHỈ sử dụng Tiếng Anh (title_en)
-                            from batch_video_cutter.utils.graphic_subtitle import clean_caption_text
-                            title_text_en = clean_caption_text(seg.title_en)
+                            telemetry.t_align = time.perf_counter() - t_align_start
 
                             if getattr(style, "get_caption_area", lambda: None)():
+                                t_cap_start = time.perf_counter()
                                 from batch_video_cutter.utils.graphic_subtitle import generate_top_caption_layer
                                 top_cap_png = Path(tmp_dir) / f"top_caption_{clip_idx}.png"
                                 canvas_res = style.get_output_resolution()
@@ -245,8 +284,11 @@ class PipelineOrchestrator:
                                 if cap_png_path and cap_png_path.exists():
                                     clip_dur = seg.end_time - seg.start_time
                                     timed_emojis = [(cap_png_path, 0.0, clip_dur)] + (timed_emojis or [])
+                                telemetry.t_pillow_draw = time.perf_counter() - t_cap_start
+                                telemetry.frames_rendered = len(timed_emojis or [])
 
                             # Render clip bằng FFmpeg với Dynamic Timed HD Color Emoji PNG & Top Caption Badge PNG
+                            t_ffmpeg_start = time.perf_counter()
                             await loop.run_in_executor(
                                 None,
                                 functools.partial(
@@ -264,6 +306,9 @@ class PipelineOrchestrator:
                                     cpu_preset=self.config.ffmpeg_preset,
                                 )
                             )
+                            telemetry.t_ffmpeg = time.perf_counter() - t_ffmpeg_start
+                            telemetry.calculate_total()
+                            telemetry.log()
 
                         return {
                             "filename": clip_filename,
@@ -324,6 +369,8 @@ class PipelineOrchestrator:
 
             # 5. Xuất các file tổng hợp tiêu đề vào DUY NHẤT thư mục đóng gói self.bundle_dir
             self._write_captions_summary(results_list)
+            from .core.analyzer import get_rejection_summary
+            logger.info("\n" + get_rejection_summary())
             logger.info(f"==== TẤT CẢ HOÀN TẤT! Tất cả video clip & file txt đã đóng gói tại: {self.bundle_dir} ====")
         finally:
             cleanup_whisper_model()
@@ -366,15 +413,14 @@ class PipelineOrchestrator:
             "",
         ]
 
-        from batch_video_cutter.utils.graphic_subtitle import clean_caption_text, censor_sensitive_words
+        from batch_video_cutter.utils.graphic_subtitle import format_external_caption
 
         has_vi_chars = lambda s: any(c in str(s).lower() for c in "àáảãạăằắẳẵặâầấẩẫậèéẻẽẹêềếểễệìíỉĩịòóỏõọôồốổỗộơờớởỡợùúủũụưừứửữựỳýỷỹỵđ")
         seen_titles = set()
 
         for stt, item in enumerate(results_list, 1):
             raw_title_en = item.get('title_en', '') or item.get('title', '')
-            cleaned = clean_caption_text(raw_title_en)
-            clean_title_en = censor_sensitive_words(cleaned).lower()
+            clean_title_en = format_external_caption(raw_title_en)
             
             lines.append(f"[{item['filename']}]")
             lines.append(f"File Output       : {item['filename']}")

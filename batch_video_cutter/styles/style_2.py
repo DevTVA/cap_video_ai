@@ -44,9 +44,10 @@ class Style2(BaseStyle):
 
         filters = [
             f"[0:v]split=2[bg][fg]",
-            f"[bg]scale={out_w}:{out_h}:force_original_aspect_ratio=increase,"
-            f"crop={out_w}:{out_h},"
-            f"boxblur=25:5[bg_blur]",
+            f"[bg]scale=270:270:force_original_aspect_ratio=increase,"
+            f"crop=270:270,"
+            f"boxblur=10:1,"
+            f"scale={out_w}:{out_h}[bg_blur]",
             f"[fg]scale={fg_w}:{fg_h}[fg_scaled]",
             f"[bg_blur][fg_scaled]overlay={overlay_x}:{overlay_y}[styled]",
         ]
@@ -65,7 +66,8 @@ class Style2(BaseStyle):
         return "bottom"
 
     def get_highlight_color(self) -> str:
-        return "red"
+        """Màu Highlight MÀU XANH LÁ ("green")."""
+        return "green"
 
     def get_font_size(self) -> int:
         """Kích thước font chữ cho Style 2 (66pt bằng tỉ lệ cỡ chữ Outcard)."""
@@ -78,4 +80,8 @@ class Style2(BaseStyle):
     def get_outro_offset(self) -> float:
         """Phong cách 2: Cắt 30 giây cuối để tránh cắt vào outcard video gốc."""
         return 30.0
+
+    def get_max_clips(self) -> Optional[int]:
+        """Phong cách 2 cắt 2 đoạn viral."""
+        return 2
 

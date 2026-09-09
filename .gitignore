@@ -21,6 +21,8 @@ emojis_cache/
 *.mp4
 *.jpg
 *.png
+*.wav
+*.mp3
 !batch_video_cutter/assets/**
 
 # Environment variables & state

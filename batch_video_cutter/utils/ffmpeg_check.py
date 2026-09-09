@@ -144,6 +144,8 @@ def detect_gpu_encoder() -> Optional[str]:
         candidates = []
         if "h264_nvenc" in output:
             candidates.append("h264_nvenc")
+        if "h264_mf" in output:
+            candidates.append("h264_mf")
         if "h264_amf" in output:
             candidates.append("h264_amf")
         if "h264_qsv" in output:
@@ -172,6 +174,9 @@ def get_best_video_encoder(enable_gpu: bool = True, cpu_preset: str = "superfast
         if gpu == "h264_nvenc":
             logger.info("Sử dụng GPU Hardware Acceleration: NVIDIA NVENC (h264_nvenc)")
             return "h264_nvenc", ["-c:v", "h264_nvenc", "-preset", "p4", "-cq", "24", "-b:v", "2800k", "-maxrate", "3500k", "-bufsize", "6M"]
+        elif gpu == "h264_mf":
+            logger.info("Sử dụng GPU Hardware Acceleration: Windows Media Foundation (h264_mf)")
+            return "h264_mf", ["-c:v", "h264_mf", "-b:v", "2800k", "-maxrate", "3500k", "-bufsize", "6M"]
         elif gpu == "h264_qsv":
             logger.info("Sử dụng GPU Hardware Acceleration: Intel QSV (h264_qsv)")
             return "h264_qsv", ["-c:v", "h264_qsv", "-preset", "veryfast", "-global_quality", "24", "-b:v", "2800k", "-maxrate", "3500k", "-bufsize", "6M"]

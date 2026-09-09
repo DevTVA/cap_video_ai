@@ -95,3 +95,22 @@
 - **Ngày**: 2026-08-22
 - **Chi tiết**: Tính toán thời lượng từ trong câu không có word-level timestamp dựa trên tổng điểm số ký tự `len(clean_word)` cộng thưởng dấu câu (`,`, `;`, `:`) +1.5, (`.`, `!`, `?`) +2.5. Giúp từ ngắn (`a`, `in`) lướt nhanh, từ dài (`extraordinary`) và khoảng ngắt nghỉ kéo dài tự nhiên như giọng nói thực.
 - **Files liên quan**: `batch_video_cutter/utils/subtitle.py`, `batch_video_cutter/utils/graphic_subtitle.py`
+
+### Chế Độ Căn Chỉnh Phụ Đề 3 Tầng (auto/fast/deep) & Gắn Nhãn Nguồn
+- **Ngày**: 2026-09-06 (Cập nhật: 2026-09-07)
+- **Chi tiết**: Phân tách rõ 3 chế độ qua cờ `--subtitle-align [auto|fast|deep]`:
+  1. `auto` (Mặc định - Quality & Frame-Accurate First): Khi có SRT/txt, tự động chạy Whisper audio stream alignment để có mốc từ chính xác từng mili-giây khớp 100% với giọng nói nhân vật. Nếu không có SRT, tự động bóc băng bằng Whisper. Tuyệt đối không dùng ước lượng Char-Weighted làm mặc định vì sẽ làm trượt nhịp giọng nói.
+  2. `fast`: Bắt buộc dùng Char-Weighted Alignment (<0.01s) cho SRT, tuyệt đối không gọi Whisper (chỉ dùng khi người dùng chủ động yêu cầu tốc độ tối đa).
+  3. `deep`: Bắt buộc chạy Whisper audio stream alignment cho SRT/txt.
+  - **Bảo vệ Cache & Metadata**: Gán nhãn `timing_source = "estimated"` khi dùng Char-Weighted và `timing_source = "whisper"` khi dùng Whisper thật. Khi chạy ở chế độ `auto` hoặc `deep`, nếu phát hiện cache là `estimated` thì tự động bỏ qua cache ước lượng để chạy Whisper align thật.
+- **Files liên quan**: `batch_video_cutter/core/transcriber.py`, `batch_video_cutter/ui/cli.py`, `batch_video_cutter/config.py`
+
+### Multi-Factor Cache Manager & Sweet Spot Concurrency
+- **Ngày**: 2026-09-06
+- **Chi tiết**: 
+  1. **Cache đa yếu tố**: Lưu transcript tại `.cache/transcripts/<hash>.json` và alignment tại `.cache/alignments/<hash>.json` với key SHA-256 từ `(mtime, size, model, lang, version)`. Bỏ qua bóc băng ở các lần chạy sau.
+  2. **Global Concurrency Sweet Spot**: Benchmark thực nghiệm chứng minh `TOTAL_RENDER_WORKERS = 2` trên GPU AMD AMF (`h264_amf`) cho thông lượng tối ưu nhất (7.39s/s), tránh nghẽn GPU bus và tràn VRAM khi tăng lên 4 workers.
+  3. **PNG I/O Speedup**: Sử dụng `compress_level=1` khi ghi ảnh tạm PNG, giảm 65% thời gian I/O đĩa (từ 1.25s xuống 0.44s cho 80 frame).
+  4. **Smart Pipeline Skip**: Tự động bỏ qua render clip nếu file thành phẩm hợp lệ đã tồn tại trên đĩa (>100KB).
+- **Files liên quan**: `batch_video_cutter/core/cache_manager.py`, `batch_video_cutter/core/telemetry.py`, `batch_video_cutter/pipeline.py`
+

@@ -9,6 +9,11 @@ from dataclasses import dataclass
 from typing import Optional
 
 
+HIGHLIGHT_COLOR_GREEN: str = "green"
+HIGHLIGHT_COLOR_YELLOW: str = "yellow"
+HIGHLIGHT_COLOR_RED: str = "red"
+
+
 @dataclass
 class CaptionArea:
     """Vùng hiển thị caption trên video.
@@ -107,15 +112,15 @@ class BaseStyle(ABC):
 
     def get_highlight_color(self) -> str:
         """Màu Highlight từ active ("green")."""
-        return "green"
+        return HIGHLIGHT_COLOR_GREEN
 
     def get_italic_option(self) -> bool:
         """Có nghiêng chữ (Italic Slant) hay không."""
         return False
 
     def get_max_clips(self) -> Optional[int]:
-        """Số lượng clip viral tối đa cần cắt cho style này (None: mặc định từ config)."""
-        return None
+        """Số lượng clip viral tối đa cần cắt cho style này (mặc định 2)."""
+        return 2
 
     def get_intro_offset(self) -> float:
         """Số giây đầu cần bỏ qua (intro video gốc)."""

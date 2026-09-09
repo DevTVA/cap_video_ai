@@ -1,7 +1,7 @@
 # API Optimization & Rate Limit Management
 
-> Tổng hợp kiến thức về tối ưu hóa LLM API, Local Caching, chống lỗi Rate Limit 429 và quy trình gộp batch export trong dự án Batch Video Cutter.
-> Cập nhật lần cuối: 2026-08-22
+> Tổng hợp kiến thức về tối ưu hóa LLM API, Pure Local Caching, chống lỗi Rate Limit 429, Waterfall Title Resolution và Supplementary Filler Engine trong dự án Batch Video Cutter.
+> Cập nhật lần cuối: 2026-08-28
 
 ---
 
@@ -17,23 +17,40 @@
 - **Chi tiết**: Phân loại chính xác các mã lỗi HTTP để xử lý riêng biệt: 401/403 đưa Key vào `_DISABLED_KEYS` ngắt toàn session; 404/Decommissioned đưa Model vào `_DISABLED_MODELS`; 429 Server Busy áp dụng Exponential Backoff Retry (tối đa 3 lần); 429 Quota Exceeded chuyển Key tiếp theo.
 - **Files liên quan**: [analyzer.py](file:///e:/AI_Agent/batch_video_cutter/core/analyzer.py)
 
+### Pure Cache Layer Separation (Tách Biệt Bộ Nhớ Tạm)
+- **Ngày**: 2026-08-28
+- **Chi tiết**: Tách biệt hoàn toàn Cache Layer: `_read_cache()` CHỈ đọc/ghi dữ liệu JSON thô từ đĩa đè lên `ViralSegment`, tuyệt đối KHÔNG chứa logic nghiệp vụ tự bù clip hay validate title. Quyết định bù clip và kiểm tra chất lượng thuộc về tầng Analyzer/Orchestrator.
+- **Files liên quan**: [analyzer.py](file:///e:/AI_Agent/batch_video_cutter/core/analyzer.py)
+
+### Chiến Lược Tiêu Đề 3 Tầng Tiết Kiệm API & Golden Rule Safeguard
+- **Ngày**: 2026-08-28
+- **Chi tiết**: Tiêu đề được giải quyết theo 3 tầng ưu tiên: Tầng 1 (Candidate Title có sẵn từ LLM Pool) ➔ Tầng 2 (Spoken Headline từ transcript qua `_extract_spoken_headline`) ➔ Tầng 3 (LLM API Refine đơn lẻ làm Last Resort). Áp dụng Quy tắc vàng: Video gốc hợp lệ không bao giờ bị loại do tiêu đề; tự động pad/trim thoại đảm bảo caption luôn đạt 8–10 từ.
+- **Files liên quan**: [analyzer.py](file:///e:/AI_Agent/batch_video_cutter/core/analyzer.py)
+
+### Supplementary Filler Engine 2 Tầng & Rejection Telemetry
+- **Ngày**: 2026-08-28
+- **Chi tiết**: Khi số clip hợp lệ < mục tiêu, kích hoạt `_fill_missing_segments`: Tier 1 (Strict Search 25–29s, intro chuẩn), Tier 2 (Relaxed Search 22–32s, intro 20s). Tích hợp Enum `CandidateRejectionReason` (INTRO, OUTRO, DURATION, DIALOGUE, DUPLICATE, TITLE, OVERLAP) và `RejectionTracker` xuất bảng thống kê lý do loại bỏ.
+- **Files liên quan**: [analyzer.py](file:///e:/AI_Agent/batch_video_cutter/core/analyzer.py), [pipeline.py](file:///e:/AI_Agent/batch_video_cutter/pipeline.py)
+
 ### Batch Caption Repair Architecture
 - **Ngày**: 2026-08-22
 - **Chi tiết**: Thay vì gửi N request riêng lẻ để sửa các title chưa đạt chuẩn (8-10 từ Tiếng Anh), hệ thống lọc các `ViralSegment` không đạt chuẩn và gửi 1 Batch API Request duy nhất để LLM sửa đồng loạt tất cả headline cùng lúc, tối ưu số lượng request và chi phí API.
-- **Files liên quan**: [analyzer.py](file:///e:/AI_Agent/batch_video_cutter/core/analyzer.py)
-
-### Tích hợp Bộ Nhớ Tạm Đĩa (Local Disk Caching)
-- **Ngày**: 2026-07-31
-- **Chi tiết**: Tạo mã Hash SHA-256 duy nhất từ `transcript_text + max_clips + prompt_template`. Trước khi gửi request lên AI API, kiểm tra cache trong `.cache/`. Nếu kết quả đã tồn tại và đủ số lượng clip, trả về ngay lập tức mà không tốn API request.
 - **Files liên quan**: [analyzer.py](file:///e:/AI_Agent/batch_video_cutter/core/analyzer.py)
 
 ---
 
 ## Bugs & Solutions
 
+### Style 2 Cắt Sai Số Lượng 3 Video Do Thiếu Method get_max_clips
+- **Ngày**: 2026-08-28
+- **Vấn đề**: Khi chạy batch với Style 2, mỗi video bị cắt thành 3 clips thay vì 2 clips.
+- **Root cause**: `Style2` thiếu method `get_max_clips()`, thừa kế `None` từ `BaseStyle` và fallback về CLI option `--max-clips` đang để default là 3.
+- **Fix**: Khai báo `get_max_clips()` riêng cho từng Style (Style 1, 2, 5: 2 clips; Style 3, 4: 3 clips) và chuẩn hóa default `--max-clips` trong `cli.py` và `base.py`.
+- **Files liên quan**: [style_1.py](file:///e:/AI_Agent/batch_video_cutter/styles/style_1.py), [style_2.py](file:///e:/AI_Agent/batch_video_cutter/styles/style_2.py), [style_3.py](file:///e:/AI_Agent/batch_video_cutter/styles/style_3.py), [style_4.py](file:///e:/AI_Agent/batch_video_cutter/styles/style_4.py), [style_5.py](file:///e:/AI_Agent/batch_video_cutter/styles/style_5.py), [cli.py](file:///e:/AI_Agent/batch_video_cutter/ui/cli.py)
+
 ### Spam Retry Loop trên Key đã cạn Quota (Lỗi Rate Limit 429)
 - **Ngày**: 2026-07-31
-- **Vấn đề**: Khi Key 1 gặp lỗi 429 trên model `gemini-2.0-flash`, code cũ tiếp tục thử `gemini-2.0-flash-lite`, `gemini-1.5-flash`, `gemini-1.5-pro` trên cùng Key 1, gây spam 429 liên tiếp và cạn sạch Quota.
+- **Vấn đề**: Khi Key 1 gặp lỗi 429 trên model `gemini-2.0-flash`, code cũ tiếp tục thử các model khác trên cùng Key 1, gây spam 429 liên tiếp và cạn sạch Quota.
 - **Root cause**: Vòng lặp inner models không dừng lại khi key đã bị rate limit.
 - **Fix**: Thêm cờ `key_exhausted = True` và `break` ra khỏi vòng lặp model khi gặp lỗi 429/quota để chuyển ngay sang Key tiếp theo.
 - **Files liên quan**: [analyzer.py](file:///e:/AI_Agent/batch_video_cutter/core/analyzer.py)
@@ -63,6 +80,14 @@
 
 ## How-To
 
+### Quy Trình Cấu Hình & Kiểm Thử Số Lượng Clip Theo Từng Phong Cách
+- **Ngày**: 2026-08-28
+- **Bước thực hiện**:
+  1. Định nghĩa rõ hàm `get_max_clips(self) -> int` trong từng class `StyleX` (ví dụ: Style 1, 2, 5 trả về 2; Style 3, 4 trả về 3).
+  2. Đảm bảo `BaseStyle.get_max_clips()` và CLI option `--max-clips` có fallback đồng bộ.
+  3. Viết unit test `test_all_styles_clip_counts()` trong `tests/test_style_mapping.py` để verify cấu hình toàn diện.
+- **Files liên quan**: [styles/](file:///e:/AI_Agent/batch_video_cutter/styles/), [test_style_mapping.py](file:///e:/AI_Agent/tests/test_style_mapping.py)
+
 ### Test & Mock Đa Kịch Bản HTTP Error Handling Cho LLM API
 - **Ngày**: 2026-08-22
 - **Bước thực hiện**:
@@ -77,12 +102,22 @@
   1. Quét tất cả file `.mp4` trong các thư mục `batch_export_*` và sắp xếp theo mtime.
   2. Map file theo pattern `folder_id.clip_id.mp4` (file mtime mới hơn sẽ đè file cũ).
   3. Hợp nhất danh sách `completed_videos` và `results_list` trong `pipeline_state.json`.
-  4. Ghi lại duy nhất 1 file `all_clip_titles.txt` và `pipeline_state.json` tổng hợp cho toàn bộ 144 clips.
+  4. Ghi lại duy nhất 1 file `all_clip_titles.txt` và `pipeline_state.json` tổng hợp cho toàn bộ clips.
 - **Files liên quan**: `scratch/merge_all_final.py`
 
 ---
 
 ## Patterns
+
+### Pure Cache Layer Separation Pattern
+- **Ngày**: 2026-08-28
+- **Chi tiết**: Tách biệt hoàn toàn tầng lưu trữ Cache I/O với tầng logic phân tích và bổ sung clip. Hàm cache chỉ đảm nhận nhiệm vụ đọc/ghi đĩa thuần túy, tránh ẩn giấu side-effects hoặc tự ý biến đổi dữ liệu.
+- **Files liên quan**: [analyzer.py](file:///e:/AI_Agent/batch_video_cutter/core/analyzer.py)
+
+### Golden Rule Title Safeguard Pattern
+- **Ngày**: 2026-08-28
+- **Chi tiết**: Tách biệt validation phân đoạn video và validation tiêu đề. Khi phân đoạn video đã hợp lệ về hình ảnh và âm thanh, tiêu đề luôn có phương án fallback tự động pad/trim từ lời thoại thực tế, đảm bảo không bao giờ loại bỏ oan video chỉ vì lỗi định dạng tiêu đề.
+- **Files liên quan**: [analyzer.py](file:///e:/AI_Agent/batch_video_cutter/core/analyzer.py)
 
 ### Session-Scoped Disabled Resource Pattern (Blacklisting Sets)
 - **Ngày**: 2026-08-22

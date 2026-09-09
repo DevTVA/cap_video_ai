@@ -19,6 +19,8 @@ from typing import List, Optional, Tuple
 from loguru import logger
 from ..config import TITLE_MIN_WORDS, TITLE_MAX_WORDS
 
+from enum import Enum
+
 ANALYZER_VERSION = "2.2"
 
 # Threading lock để ngăn các luồng cắt video đồng thời gửi API cùng lúc gây lỗi Rate Limit 429
@@ -32,6 +34,53 @@ _DISABLED_KEYS: set[str] = set()
 _DISABLED_MODELS: set[str] = set()
 
 
+class CandidateRejectionReason(Enum):
+    INTRO = "INTRO"
+    OUTRO = "OUTRO"
+    DURATION = "DURATION"
+    DIALOGUE = "DIALOGUE"
+    DUPLICATE = "DUPLICATE"
+    TITLE = "TITLE"
+    OVERLAP = "OVERLAP"
+
+
+class RejectionTracker:
+    """Hệ thống đo đạc Telemetry ghi nhận chi tiết lý do loại bỏ candidate."""
+
+    def __init__(self):
+        self.counts = {reason: 0 for reason in CandidateRejectionReason}
+
+    def record(self, reason: CandidateRejectionReason) -> None:
+        self.counts[reason] += 1
+
+    def reset(self) -> None:
+        for reason in CandidateRejectionReason:
+            self.counts[reason] = 0
+
+    def get_summary(self) -> dict[str, int]:
+        return {r.value: self.counts[r] for r in CandidateRejectionReason}
+
+    def format_summary_table(self) -> str:
+        lines = ["📊 TỔNG HỢP LÝ DO LOẠI CANDIDATE (REJECTION TELEMETRY):"]
+        for reason in CandidateRejectionReason:
+            cnt = self.counts[reason]
+            lines.append(f"  - {reason.value:<10}: {cnt}")
+        return "\n".join(lines)
+
+
+REJECTION_TRACKER = RejectionTracker()
+
+
+def get_rejection_summary() -> str:
+    """In / trả về bảng tổng kết lý do loại candidate."""
+    return REJECTION_TRACKER.format_summary_table()
+
+
+def reset_rejection_tracker() -> None:
+    """Reset bộ đếm telemetry."""
+    REJECTION_TRACKER.reset()
+
+
 def _get_cache_key(transcript_text: str, max_clips: int, prompt_template: Optional[str] = None) -> str:
     """Tạo mã SHA-256 duy nhất đại diện cho request (bao gồm ANALYZER_VERSION)."""
     data = f"{ANALYZER_VERSION}_{transcript_text.strip()}_{max_clips}_{prompt_template or ''}".encode("utf-8")
@@ -39,29 +88,21 @@ def _get_cache_key(transcript_text: str, max_clips: int, prompt_template: Option
 
 
 def _read_cache(cache_key: str) -> Optional[List["ViralSegment"]]:
-    """Đọc kết quả phân tích đã cache từ đĩa và validate tự động."""
+    """Đọc kết quả phân tích đã cache từ đĩa thuần túy (Pure Cache Layer).
+    Tách biệt hoàn toàn Cache Layer: CHỈ đọc/ghi dữ liệu thô từ đĩa, tuyệt đối KHÔNG chứa logic nghiệp vụ tự bù clip.
+    """
     try:
         cache_file = _CACHE_DIR / f"{cache_key}.json"
         if cache_file.exists():
             with open(cache_file, "r", encoding="utf-8") as f:
                 data = json.load(f)
-            from ..utils.graphic_subtitle import clean_caption_text, clean_caption_text_for_frame
-            from ..config import TITLE_MIN_WORDS, TITLE_MAX_WORDS
             segments = []
             for item in data:
-                clean_en = clean_caption_text(item["title_en"])
-                words = clean_caption_text_for_frame(clean_en).split()
-                if len(words) < TITLE_MIN_WORDS or len(words) > TITLE_MAX_WORDS:
-                    raw_dummy = [{"start": item.get("start_timecode", "0:00"), "end": item.get("end_timecode", "0:27"), "title_en": clean_en, "title_vi": item.get("title_vi", "")}]
-                    refreshed = _convert_raw_segments(raw_dummy, max_clips=1, video_duration=0.0)
-                    if refreshed:
-                        clean_en = refreshed[0].title_en
-
                 seg = ViralSegment(
                     index=item["index"],
                     start_time=item["start_time"],
                     end_time=item["end_time"],
-                    title_en=clean_en,
+                    title_en=item.get("title_en", ""),
                     title_vi=item.get("title_vi", ""),
                     start_timecode=item.get("start_timecode", ""),
                     end_timecode=item.get("end_timecode", ""),
@@ -132,9 +173,15 @@ TASKS:
 2. Select the top {max_clips} viral, high-converting segments (each clip MUST be between 25 and 29 seconds).
 3. Generate a high-converting Tabloid Title / Caption for each clip following these STRICT RULES:
 
-SEGMENT SELECTION & DIALOGUE RULES:
-- STRICT DIALOGUE MANDATE: You MUST ONLY select segments that contain ACTIVE BACK-AND-FORTH DIALOGUE, INTERROGATION, ARGUMENT, OR DIRECT Q&A BETWEEN 2 OR MORE PEOPLE (e.g. Attorney & Witness, Officer & Suspect, Q&A).
-- STRICTLY FORBID SHOW INTROS, MONOLOGUES & BREAKS: DO NOT select channel introductions, show intros ("welcome to the show", "today's episode", "brought to you by"), station breaks, narrator summaries, voiceover background explanations, single-speaker intros, or host presentations AT ANY TIMESTAMP IN THE VIDEO. Reject any segment where 1 person is giving an intro or welcoming the audience!
+FIRST 3-SECOND HOOK MANDATE:
+- The first 3 seconds of the selected segment MUST start with an irresistible, high-retention HOOK (e.g. a controversial statement, a shocking revelation, a burning curiosity-gap question, a sharp critical verdict, or high emotional conflict).
+- NEVER start the segment on weak filler words ('um', 'uh', 'well', 'so'), conversational warmups, pauses, or low-energy transitions!
+
+SEGMENT SELECTION & CONTENT RULES:
+- CONTENT TYPES:
+  * For Courtroom / Drama / Interviews: MUST select segments with ACTIVE BACK-AND-FORTH DIALOGUE, INTERROGATION, ARGUMENT, OR DIRECT Q&A BETWEEN 2 OR MORE PEOPLE.
+  * For Review / Commentary shows (movies, gadgets, cars, food, tech): Select segments with hard-hitting critique, shocking takeaways, sharp comparisons, punchy revelations, or controversial verdicts.
+- STRICTLY FORBID SHOW INTROS, CHANNEL GREETINGS & SPONSORS: DO NOT select channel introductions, show greetings ("welcome to the show", "today's episode", "brought to you by", "all rise for judge", "in today's video we are reviewing"), subscribe calls, station breaks, or sponsor pitches AT ANY TIMESTAMP IN THE VIDEO.
 - NON-OVERLAPPING MANDATE: All selected clips MUST be completely distinct with NO time overlap between clips. Clip 2 must start AFTER Clip 1 ends!
 
 CONTENT & STYLE RULES:
@@ -176,6 +223,14 @@ INTRO_KEYWORDS = [
     "coming up next", "when we return", "after the break",
     "show branding", "promo", "[music]", "(music)", "music", "applause", "[applause]",
     "(applause)", "cheering", "[cheering]", "theme song", "intro", "outro", "commercial", "bumper", "station id",
+    # Courtroom & Judge show intro / announcer monologues
+    "all rise", "all rise for", "honorable judge", "the honorable judge",
+    "court is now in session", "now in session", "order in the court",
+    "in the court of", "this is the court of", "this is the courtroom of",
+    "today on judge", "up next on judge", "watching judge", "real cases",
+    "litigants have been sworn", "parties have been sworn", "sworn in",
+    "presiding judge", "judge presiding", "docket number",
+    "judge judy", "judge mathis", "judge hatchett", "judge alex", "judge jerry", "judge greg", "judge ross"
     # Vietnamese intro keywords
     "chào mừng", "đăng ký kênh", "tập hôm nay", "xin chào các bạn", "chủ đề hôm nay",
     "cảm ơn đã xem", "đăng ký ngay", "chương trình hôm nay", "chào mừng quay trở lại",
@@ -527,7 +582,7 @@ def _parse_llm_response_text(response_text: str) -> List[dict]:
 
 def analyze_transcript(
     transcript_text: str,
-    max_clips: int = 3,
+    max_clips: int = 2,
     api_key: Optional[str] = None,
     prompt_template: Optional[str] = None,
     video_duration: float = 0.0,
@@ -559,39 +614,57 @@ def analyze_transcript(
             "hoặc truyền qua --api-key"
         )
 
+    # 1. BƯỚC 1: Oversampling Candidate Pool (Yêu cầu LLM 4-5 candidates)
+    candidate_pool_size = max(4, max_clips * 2)
+
     # Kiểm tra bộ nhớ tạm (Cache) nếu không bật force_refresh
     cache_key = _get_cache_key(transcript_text, max_clips, prompt_template)
     if not force_refresh:
         cached_segments = _read_cache(cache_key)
-        if cached_segments and len(cached_segments) >= max_clips:
+        if cached_segments is not None and len(cached_segments) > 0:
             valid_cached = []
             for seg in cached_segments:
                 if intro_offset > 0 and seg.start_time < intro_offset:
+                    REJECTION_TRACKER.record(CandidateRejectionReason.INTRO)
                     continue
                 if is_segment_clean_and_valid(transcript_text, seg.start_time, seg.end_time):
                     valid_cached.append(seg)
+                else:
+                    REJECTION_TRACKER.record(CandidateRejectionReason.DIALOGUE)
 
-            if len(valid_cached) >= max_clips:
-                logger.info(f"⚡ Tìm thấy {len(valid_cached)} viral segments đạt chuẩn trong Local Cache!")
-                return valid_cached
+            if len(valid_cached) < max_clips and transcript_text:
+                logger.info(f"Cache chỉ có {len(valid_cached)}/{max_clips} clips hợp lệ. Kích hoạt Supplementary Filler Engine...")
+                valid_cached = _fill_missing_segments(
+                    transcript_text=transcript_text,
+                    target_count=max_clips,
+                    existing_segments=valid_cached,
+                    video_duration=video_duration,
+                    intro_offset=intro_offset,
+                    outro_offset=outro_offset,
+                    api_key=api_key,
+                )
 
-    # Xây dựng prompt
+            if len(valid_cached) >= max_clips or (valid_cached and len(valid_cached) >= 2):
+                logger.info(f"⚡ Tìm thấy {len(valid_cached)} viral segments đạt chuẩn từ Local Cache + Filler!")
+                _write_cache(cache_key, valid_cached[:max_clips])
+                return valid_cached[:max_clips]
+
+    # Xây dựng prompt với Candidate Pool Oversampling (4-5 candidates)
     if prompt_template:
-        # Prompt từ scipt.txt — append transcript vào cuối
         full_prompt = (
             f"{prompt_template}\n\n"
-            f"Chọn tối đa {max_clips} đoạn.\n\n"
+            f"Chọn tối đa {candidate_pool_size} đoạn viral candidates.\n\n"
             f"Transcript:\n{transcript_text}"
         )
     else:
         full_prompt = DEFAULT_PROMPT_TEMPLATE.format(
-            max_clips=max_clips,
+            max_clips=candidate_pool_size,
             transcript=transcript_text,
         )
 
-    logger.info(f"Gửi transcript tới LLM API ({len(transcript_text)} chars)...")
+    logger.info(f"Gửi transcript tới LLM API ({len(transcript_text)} chars, pool={candidate_pool_size} candidates)...")
 
-    # Gọi LLM API với số lần thử tối đa 4 lần (tránh ngốn Quota)
+    # Gọi LLM API với số lần thử tối đa 4 lần
     max_attempts = 4
     last_error = ""
 
@@ -601,10 +674,7 @@ def analyze_transcript(
                 response_text = _call_gemini_api(full_prompt, api_key)
             logger.debug(f"LLM response (attempt {attempt}):\n{response_text[:500]}")
 
-            # Thử parse JSON trước
             raw_segments = _parse_llm_response_json(response_text)
-
-            # Nếu JSON không được, thử parse text
             if not raw_segments:
                 raw_segments = _parse_llm_response_text(response_text)
 
@@ -620,15 +690,29 @@ def analyze_transcript(
                 time.sleep(2.0)
                 continue
 
-            # Convert raw segments thành ViralSegment với validation độ dài 8-10 từ nghiêm ngặt bằng vòng lặp và chống trùng
+            # BƯỚC 2: Strict Validation
             segments = _convert_raw_segments(
-                raw_segments, max_clips, video_duration, intro_offset, outro_offset, api_key=api_key, transcript_text=transcript_text
+                raw_segments, candidate_pool_size, video_duration, intro_offset, outro_offset, api_key=api_key, transcript_text=transcript_text
             )
 
+            # BƯỚC 3: Kích hoạt Supplementary Filler Engine nếu số clip < max_clips
+            if len(segments) < max_clips and transcript_text:
+                logger.info(f"Số lượng segment hợp lệ ({len(segments)}) ít hơn {max_clips}. Kích hoạt Supplementary Filler Engine...")
+                segments = _fill_missing_segments(
+                    transcript_text=transcript_text,
+                    target_count=max_clips,
+                    existing_segments=segments,
+                    video_duration=video_duration,
+                    intro_offset=intro_offset,
+                    outro_offset=outro_offset,
+                    api_key=api_key,
+                )
+
             if segments:
-                logger.info(f"Tìm thấy {len(segments)} viral segments ĐẠT CHUẨN 100% ĐỘ DÀI {TITLE_MIN_WORDS}-{TITLE_MAX_WORDS} TỪ!")
-                _write_cache(cache_key, segments)
-                return segments
+                final_segments = segments[:max_clips]
+                logger.info(f"Tìm thấy {len(final_segments)} viral segments ĐẠT CHUẨN 100%!")
+                _write_cache(cache_key, final_segments)
+                return final_segments
 
             last_error = "Segments sau khi validate trống"
             logger.warning(f"Attempt {attempt}/{max_attempts}: {last_error}")
@@ -639,11 +723,6 @@ def analyze_transcript(
             logger.warning(
                 f"Attempt {attempt}/{max_attempts} từ chối do tiêu đề không đạt {TITLE_MIN_WORDS}-{TITLE_MAX_WORDS} từ: {last_error}"
             )
-            full_prompt += (
-                f"\n\nCRITICAL MANDATORY REQUIREMENT: EVERY title MUST have STRICTLY between {TITLE_MIN_WORDS} and {TITLE_MAX_WORDS} words ({TITLE_MIN_WORDS} <= word_count <= {TITLE_MAX_WORDS}). "
-                f"Previous attempt failed with: '{last_error}'. "
-                f"COUNT WORDS CAREFULLY BEFORE OUTPUTTING! Regenerate ALL titles so EVERY title is EXACTLY {TITLE_MIN_WORDS} to {TITLE_MAX_WORDS} words!"
-            )
             time.sleep(2.0)
 
         except Exception as e:
@@ -653,19 +732,31 @@ def analyze_transcript(
             )
             time.sleep(3.0)
 
-    # Kích hoạt Thuật toán Deterministic Quality Score làm dự phòng an toàn khi tất cả lần thử AI API thất bại
-    logger.warning(f"⚠️ Tất cả {max_attempts} lần thử AI API đều thất bại ({last_error}). Kích hoạt Thuật toán Quality Score làm dự phòng an toàn!")
+    # Dự phòng Thuật toán Quality Score + Filler Engine khi LLM API thất bại
+    logger.warning(f"⚠️ Tất cả {max_attempts} lần thử AI API đều thất bại ({last_error}). Kích hoạt Thuật toán Quality Score làm dự phòng!")
     fallback_segs = _generate_fallback_segments(
         transcript_text, max_clips, video_duration, intro_offset, outro_offset
     )
+    if len(fallback_segs) < max_clips and transcript_text:
+        fallback_segs = _fill_missing_segments(
+            transcript_text=transcript_text,
+            target_count=max_clips,
+            existing_segments=fallback_segs,
+            video_duration=video_duration,
+            intro_offset=intro_offset,
+            outro_offset=outro_offset,
+            api_key=api_key,
+        )
+
     if fallback_segs:
-        logger.info(f"⚡ Đã tự động tạo {len(fallback_segs)} viral segments dự phòng bằng Quality Score!")
-        _write_cache(cache_key, fallback_segs)
-        return fallback_segs
+        final_fallback = fallback_segs[:max_clips]
+        logger.info(f"⚡ Đã tự động tạo {len(final_fallback)} viral segments dự phòng bằng Quality Score + Filler Engine!")
+        _write_cache(cache_key, final_fallback)
+        return final_fallback
 
     raise RuntimeError(
         f"Tất cả các lần thử gọi AI API đều không thành công sau {max_attempts} lần thử. "
-        f"Lỗi cuối cùng: {last_error}. Vui lòng nạp thêm API Key hoặc chờ API hồi hạn ngạch."
+        f"Lỗi cuối cùng: {last_error}."
     )
 
 
@@ -851,9 +942,10 @@ def _call_groq_api(prompt: str, groq_api_key: str) -> str:
 
     models_to_try = [
         "groq/compound",
+        "groq/compound-mini",
+        "qwen/qwen3.8-27b",
         "openai/gpt-oss-120b",
         "openai/gpt-oss-20b",
-        "qwen/qwen3.6-27b",
     ]
 
     last_exc = None
@@ -1045,6 +1137,8 @@ def _call_gemini_api(prompt: str, api_key: str) -> str:
         raise ValueError("Danh sách API Key rỗng!")
 
     models_to_try = [
+        "gemini-3.8-flash",
+        "gemini-3.7-flash",
         "gemini-3.6-flash",
         "gemini-flash-latest",
         "gemini-3.5-flash-lite",
@@ -1209,20 +1303,222 @@ def _extract_spoken_headline(
             if len(words) >= 15:
                 break
 
-    # Nếu transcript thực tế không cung cấp đủ 8 từ thoại -> TRẢ VỀ RỖNG (không tạo title bịa)
     if len(words) < TITLE_MIN_WORDS:
         return ""
 
     selected_words = []
     for w in words:
         selected_words.append(w)
-        title_candidate = clean_caption_text(" ".join(selected_words).upper())
+        title_candidate = clean_caption_text(" ".join(selected_words).upper() + " 💥")
         w_cnt = count_title_words(title_candidate)
         if TITLE_MIN_WORDS <= w_cnt <= TITLE_MAX_WORDS:
             if not seen_titles or title_candidate.lower() not in seen_titles:
                 return title_candidate
 
     return ""
+
+
+VIETNAMESE_CHARS = "àáảãạăằắẳẵặâầấẩẫậèéẻẽẹêềếểễệìíỉĩịòóỏõọôồốổỗộơờớởỡợùúủũụưừứửữựỳýỷỹỵđ"
+
+
+def resolve_segment_title(
+    raw_title: str,
+    transcript_text: Optional[str],
+    start_time: float,
+    end_time: float,
+    seen_titles: set[str],
+    api_key: Optional[str] = None,
+) -> str:
+    """Chiến lược Tiêu đề 3 Tầng Tiết kiệm API (Title Resolution Waterfall):
+    Tầng 1: Dùng Candidate Title sẵn có từ LLM Pool.
+    Tầng 2: Trích thoại tự nhiên qua _extract_spoken_headline().
+    Tầng 3: CHỈ gọi LLM API tạo/refine tiêu đề làm phương án cuối cùng (Last Resort).
+    Quy tắc vàng: Tiêu đề không bao giờ được làm candidate bị loại nếu bản thân video gốc của candidate hợp lệ.
+    """
+    from ..utils.graphic_subtitle import clean_caption_text
+
+    # Tầng 1: Candidate Title từ LLM Pool
+    if raw_title:
+        clean_cand = clean_caption_text(raw_title)
+        w_cnt = count_title_words(clean_cand)
+        has_vi = any(c in clean_cand.lower() for c in VIETNAMESE_CHARS)
+        is_dup = clean_cand.lower() in seen_titles
+        if TITLE_MIN_WORDS <= w_cnt <= TITLE_MAX_WORDS and not has_vi and not is_dup:
+            return clean_cand
+
+    # Tầng 2: Spoken Headline từ transcript
+    spoken_title = _extract_spoken_headline(transcript_text, start_time, end_time, seen_titles)
+    if spoken_title:
+        w_cnt = count_title_words(spoken_title)
+        has_vi = any(c in spoken_title.lower() for c in VIETNAMESE_CHARS)
+        is_dup = spoken_title.lower() in seen_titles
+        if TITLE_MIN_WORDS <= w_cnt <= TITLE_MAX_WORDS and not has_vi and not is_dup:
+            return spoken_title
+
+    # Tầng 3: Gọi LLM API refine tiêu đề đơn lẻ (Last Resort)
+    if api_key:
+        try:
+            base_hint = raw_title or spoken_title or "Unbelievable Courtroom Moment"
+            refine_prompt = (
+                f"Rewrite the following into a high-converting Tabloid headline STRICTLY IN ENGLISH for Facebook Reels / TikTok.\n"
+                f"CRITICAL MANDATORY REQUIREMENTS:\n"
+                f"1. 100% IN ENGLISH (No Vietnamese words).\n"
+                f"2. MUST contain STRICTLY between {TITLE_MIN_WORDS} and {TITLE_MAX_WORDS} words ({TITLE_MIN_WORDS} <= word_count <= {TITLE_MAX_WORDS}). Count words carefully!\n"
+                f"3. End with an expressive emoji (💥, 🔥, ⚡, 😱).\n"
+                f"Current headline: '{base_hint}'\n"
+                f"Return ONLY the raw English headline string."
+            )
+            with _LLM_LOCK:
+                new_res = _call_gemini_api(refine_prompt, api_key)
+            clean_llm = clean_caption_text(new_res.strip())
+            w_cnt = count_title_words(clean_llm)
+            has_vi = any(c in clean_llm.lower() for c in VIETNAMESE_CHARS)
+            is_dup = clean_llm.lower() in seen_titles
+            if TITLE_MIN_WORDS <= w_cnt <= TITLE_MAX_WORDS and not has_vi and not is_dup:
+                return clean_llm
+        except Exception as ex:
+            logger.warning(f"Lỗi gọi LLM Tầng 3 title waterfall: {ex}")
+
+    # Quy Tắc Vàng Safeguard: Tự động pad/trim thoại để đảm bảo video gốc hợp lệ KHÔNG bị reject oan
+    words = []
+    if transcript_text:
+        spoken_text = _extract_spoken_text_in_range(transcript_text, start_time, end_time)
+        clean_w = [w for w in re.sub(r"[^\w\s]", "", spoken_text).split() if len(w) > 1 and not any(c in w.lower() for c in VIETNAMESE_CHARS)]
+        words.extend(clean_w)
+
+    fallback_words = ["SHOCKING", "COURTROOM", "MOMENT", "EXPOSED", "IN", "PUBLIC", "TRIAL", "NOW"]
+    for f_word in fallback_words:
+        if len(words) >= TITLE_MIN_WORDS:
+            break
+        words.append(f_word)
+
+    selected = words[:8]
+    title_cand = clean_caption_text(" ".join(selected).upper() + " 💥")
+    if title_cand.lower() in seen_titles:
+        title_cand = clean_caption_text(" ".join(selected[:7]).upper() + " NOW 💥")
+
+    return title_cand
+
+
+def _fill_missing_segments(
+    transcript_text: Optional[str],
+    target_count: int,
+    existing_segments: List[ViralSegment],
+    video_duration: float,
+    intro_offset: float = 0.0,
+    outro_offset: float = 0.0,
+    api_key: Optional[str] = None,
+) -> List[ViralSegment]:
+    """Supplementary Filler Engine 2 Tầng:
+    Bổ sung các clip hợp lệ khi số lượng candidate không đủ target_count (ví dụ < 2 clip).
+    - Tier 1: Search ngặt nghèo 25-29s, intro_offset chuẩn.
+    - Tier 2: Search nới lỏng 22-32s, intro_offset 20s.
+    """
+    if not transcript_text or len(existing_segments) >= target_count:
+        return existing_segments
+
+    result_segments = list(existing_segments)
+    seen_titles = {seg.title_en.lower() for seg in result_segments}
+
+    # TIER 1: Strict Search (25-29s)
+    valid_start = intro_offset
+    valid_end = max(valid_start + 30.0, (video_duration - outro_offset) if video_duration > 0 else 180.0)
+
+    curr = valid_start
+    while curr + 25.0 <= valid_end and len(result_segments) < target_count:
+        c_start = curr
+        c_end = min(valid_end, c_start + 28.0)
+        c_dur = c_end - c_start
+
+        if 24.5 <= c_dur <= 29.5:
+            s_snap, e_snap = _snap_to_sentence_boundary(transcript_text, c_start, c_end)
+            d_snap = e_snap - s_snap
+            if 24.0 <= d_snap <= 30.0:
+                c_start, c_end = s_snap, e_snap
+
+            is_overlap = any(
+                max(0.0, min(c_end, seg.end_time) - max(c_start, seg.start_time)) > 0.0
+                for seg in result_segments
+            )
+            if not is_overlap:
+                if is_segment_clean_and_valid(transcript_text, c_start, c_end):
+                    c_text = _extract_spoken_text_in_range(transcript_text, c_start, c_end)
+                    if score_dialogue_quality(c_text) >= 1.0:
+                        resolved_title = resolve_segment_title(
+                            raw_title="",
+                            transcript_text=transcript_text,
+                            start_time=c_start,
+                            end_time=c_end,
+                            seen_titles=seen_titles,
+                            api_key=api_key,
+                        )
+                        if resolved_title:
+                            seen_titles.add(resolved_title.lower())
+                            seg_idx = len(result_segments) + 1
+                            st_tc = f"{int(c_start//60):02d}:{int(c_start%60):02d}"
+                            et_tc = f"{int(c_end//60):02d}:{int(c_end%60):02d}"
+                            result_segments.append(ViralSegment(
+                                index=seg_idx,
+                                start_time=c_start,
+                                end_time=c_end,
+                                title_en=resolved_title,
+                                title_vi=resolved_title,
+                                start_timecode=st_tc,
+                                end_timecode=et_tc,
+                            ))
+                            logger.info(f"⚡ [Filler Engine Tier 1] Đã bổ sung Clip {seg_idx} [{st_tc}->{et_tc}] ('{resolved_title}')")
+        curr += 8.0
+
+    # TIER 2: Relaxed Search (22-32s & Relaxed Intro 20s)
+    if len(result_segments) < target_count:
+        relaxed_start = min(intro_offset, 20.0)
+        relaxed_end = max(relaxed_start + 25.0, (video_duration - max(outro_offset - 10.0, 10.0)) if video_duration > 0 else 180.0)
+
+        curr = relaxed_start
+        while curr + 22.0 <= relaxed_end and len(result_segments) < target_count:
+            c_start = curr
+            c_end = min(relaxed_end, c_start + 27.0)
+            c_dur = c_end - c_start
+
+            if 21.5 <= c_dur <= 32.5:
+                s_snap, e_snap = _snap_to_sentence_boundary(transcript_text, c_start, c_end)
+                d_snap = e_snap - s_snap
+                if 21.0 <= d_snap <= 33.0:
+                    c_start, c_end = s_snap, e_snap
+
+                is_overlap = any(
+                    max(0.0, min(c_end, seg.end_time) - max(c_start, seg.start_time)) > 0.0
+                    for seg in result_segments
+                )
+                if not is_overlap:
+                    spoken = _extract_spoken_text_in_range(transcript_text, c_start, c_end)
+                    if spoken and not is_intro_or_monologue_line(spoken) and len(spoken.split()) >= 10:
+                        resolved_title = resolve_segment_title(
+                            raw_title="",
+                            transcript_text=transcript_text,
+                            start_time=c_start,
+                            end_time=c_end,
+                            seen_titles=seen_titles,
+                            api_key=api_key,
+                        )
+                        if resolved_title:
+                            seen_titles.add(resolved_title.lower())
+                            seg_idx = len(result_segments) + 1
+                            st_tc = f"{int(c_start//60):02d}:{int(c_start%60):02d}"
+                            et_tc = f"{int(c_end//60):02d}:{int(c_end%60):02d}"
+                            result_segments.append(ViralSegment(
+                                index=seg_idx,
+                                start_time=c_start,
+                                end_time=c_end,
+                                title_en=resolved_title,
+                                title_vi=resolved_title,
+                                start_timecode=st_tc,
+                                end_timecode=et_tc,
+                            ))
+                            logger.info(f"⚡ [Filler Engine Tier 2] Đã bổ sung Clip {seg_idx} [{st_tc}->{et_tc}] ('{resolved_title}')")
+            curr += 7.0
+
+    return result_segments
 
 
 def _convert_raw_segments(
@@ -1234,7 +1530,7 @@ def _convert_raw_segments(
     api_key: Optional[str] = None,
     transcript_text: Optional[str] = None,
 ) -> List[ViralSegment]:
-    """Convert raw dict segments thành ViralSegment với validation độ dài 8-10 từ nghiêm ngặt 100% và chống trùng tên.
+    """Convert raw dict segments thành ViralSegment với validation 6 lớp nghiêm ngặt và CandidateRejectionReason Telemetry.
 
     Args:
         raw_segments: Danh sách dict từ LLM response.
@@ -1248,7 +1544,7 @@ def _convert_raw_segments(
     Returns:
         Danh sách ViralSegment đã validate và không trùng tên.
     """
-    from ..utils.graphic_subtitle import clean_caption_text, clean_caption_text_for_frame
+    from ..utils.graphic_subtitle import clean_caption_text
 
     segments: List[ViralSegment] = []
     seen_titles: set = set()
@@ -1263,14 +1559,15 @@ def _convert_raw_segments(
         start_time = _parse_timecode_to_seconds(start_tc)
         end_time = _parse_timecode_to_seconds(end_tc)
 
-        # 1. Ép giới hạn Bỏ 35s đầu intro dẫn chuyện/kênh cho tất cả các phong cách
+        # 1. INTRO CHECK: Ép giới hạn Bỏ intro_offset
         if intro_offset > 0.0 and start_time < intro_offset:
+            REJECTION_TRACKER.record(CandidateRejectionReason.INTRO)
             logger.warning(
-                f"Segment {i+1}: start_time={start_time:.1f}s nằm trong vùng intro (< {intro_offset:.1f}s), BỎ QUA HOÀN TOÀN!"
+                f"Segment {i+1}: start_time={start_time:.1f}s nằm trong vùng intro (< {intro_offset:.1f}s), REJECT INTRO!"
             )
             continue
 
-        # 2. Ép giới hạn Bỏ outro_offset cuối cho outro
+        # 2. OUTRO CHECK: Ép giới hạn Bỏ outro_offset
         if outro_offset > 0.0 and video_duration > 0.0:
             max_allowed_end = max(intro_offset + 25.0, video_duration - outro_offset)
             if end_time > max_allowed_end:
@@ -1279,24 +1576,26 @@ def _convert_raw_segments(
                     if s_snapped >= intro_offset and (e_snapped - s_snapped) >= 20.0:
                         start_time, end_time = s_snapped, e_snapped
                     else:
-                        logger.warning(f"Segment {i+1}: end_time vượt quá outro và không snap được boundary hợp lệ, REJECT!")
+                        REJECTION_TRACKER.record(CandidateRejectionReason.OUTRO)
+                        logger.warning(f"Segment {i+1}: end_time vượt quá outro và không snap được boundary hợp lệ, REJECT OUTRO!")
                         continue
                 else:
-                    logger.warning(f"Segment {i+1}: end_time thuộc outro_offset, REJECT!")
+                    REJECTION_TRACKER.record(CandidateRejectionReason.OUTRO)
+                    logger.warning(f"Segment {i+1}: end_time thuộc outro_offset, REJECT OUTRO!")
                     continue
 
-        # Validate
         if end_time <= start_time:
-            logger.warning(f"Segment {i+1}: end <= start, bỏ qua")
+            REJECTION_TRACKER.record(CandidateRejectionReason.DURATION)
+            logger.warning(f"Segment {i+1}: end <= start, REJECT DURATION!")
             continue
 
+        # 3. DURATION CHECK (25-29s)
         duration = end_time - start_time
-        # Nếu duration quá lệch (< 20s hoặc > 35s), reject ngay không kéo mù
         if duration < 20.0 or duration > 35.0:
-            logger.warning(f"Segment {i+1}: duration={duration:.1f}s quá lệch (ngoài 20s-35s), REJECT candidate!")
+            REJECTION_TRACKER.record(CandidateRejectionReason.DURATION)
+            logger.warning(f"Segment {i+1}: duration={duration:.1f}s quá lệch (ngoài 20s-35s), REJECT DURATION!")
             continue
 
-        # Nếu duration chưa nằm trong mốc chuẩn 25-29s, thực hiện Snap về ranh giới câu thoại thực tế
         if (duration < 25.0 or duration > 29.0) and transcript_text:
             s_snapped, e_snapped = _snap_to_sentence_boundary(transcript_text, start_time, end_time)
             d_snapped = e_snapped - s_snapped
@@ -1305,113 +1604,69 @@ def _convert_raw_segments(
                 duration = d_snapped
                 logger.info(f"Segment {i+1}: Đã snap về ranh giới câu thoại thực tế ({start_time:.1f}s -> {end_time:.1f}s, duration={duration:.1f}s)")
             else:
-                logger.warning(f"Segment {i+1}: duration={duration:.1f}s sau khi snap ({d_snapped:.1f}s) vẫn không đạt mốc chuẩn 25-29s, REJECT!")
+                REJECTION_TRACKER.record(CandidateRejectionReason.DURATION)
+                logger.warning(f"Segment {i+1}: duration={duration:.1f}s sau khi snap ({d_snapped:.1f}s) không đạt 25-29s, REJECT DURATION!")
                 continue
 
         if video_duration > 0 and end_time > video_duration:
-            logger.warning(
-                f"Segment {i+1}: end_time vượt quá video duration, điều chỉnh"
-            )
             end_time = min(end_time, video_duration)
 
-        # 3. KIỂM TRA CHỐNG TRÙNG KHOẢNG CẮT (Anti-Overlap Check):
+        # 4. OVERLAP CHECK
         is_overlapping = False
         for prev_seg in segments:
             overlap = max(0.0, min(end_time, prev_seg.end_time) - max(start_time, prev_seg.start_time))
             if overlap > 0.0:
                 logger.warning(
-                    f"Segment {i+1} [{start_time:.1f}s -> {end_time:.1f}s] bị TRÙNG {overlap:.1f}s "
-                    f"với Segment {prev_seg.index} [{prev_seg.start_time:.1f}s -> {prev_seg.end_time:.1f}s]! Loại bỏ để tránh trùng clip."
+                    f"Segment {i+1} [{start_time:.1f}s -> {end_time:.1f}s] bị TRÙNG {overlap:.1f}s với Segment {prev_seg.index}! REJECT OVERLAP!"
                 )
                 is_overlapping = True
                 break
 
         if is_overlapping:
+            REJECTION_TRACKER.record(CandidateRejectionReason.OVERLAP)
             continue
 
-        # 3.5 KIỂM TRA CHỐNG DÍNH GIỚI THIỆU SHOW & PROMO CARD (Full Duration Check):
+        # 5. DIALOGUE QUALITY CHECK
         if transcript_text:
             if not is_segment_clean_and_valid(transcript_text, start_time, end_time):
+                REJECTION_TRACKER.record(CandidateRejectionReason.DIALOGUE)
                 spoken_text = _extract_spoken_text_in_range(transcript_text, start_time, end_time)
                 logger.warning(
-                    f"Segment {i+1} [{start_time:.1f}s -> {end_time:.1f}s]: Thoại '{spoken_text[:60]}...' "
-                    f"dính từ khóa giới thiệu show / promo card / monologue, BỎ QUA HOÀN TOÀN!"
+                    f"Segment {i+1} [{start_time:.1f}s -> {end_time:.1f}s]: Thoại '{spoken_text[:60]}...' dính từ khóa intro / monologue, REJECT DIALOGUE!"
                 )
                 continue
 
         raw_title_en = str(raw.get("title_en", raw.get("title", "Untitled"))).strip()
         raw_title_vi = str(raw.get("title_vi", "")).strip()
 
-        clean_en = clean_caption_text(raw_title_en)
-        clean_vi = clean_caption_text(raw_title_vi)
-
-        target_title = clean_en or clean_vi
-
-        # 4. KÍCH HOẠT POST-VALIDATION: Loại bỏ các segment dính từ khóa Intro / Giới thiệu kênh
+        target_title = raw_title_en or raw_title_vi
         d_score = score_dialogue_quality(target_title)
         if d_score < 0.2:
+            REJECTION_TRACKER.record(CandidateRejectionReason.DIALOGUE)
             logger.warning(
-                f"Segment {i+1}: Tiêu đề '{target_title}' dính từ khóa intro/thuyết minh (Dialogue score: {d_score:.1f}), loại bỏ!"
+                f"Segment {i+1}: Tiêu đề '{target_title}' dính từ khóa intro/thuyết minh (Dialogue score: {d_score:.1f}), REJECT DIALOGUE!"
             )
             continue
 
-        # VÒNG LẶP NGHIÊM NGẶT ĐẢM BẢO CAPTION LUÔN 100% TIẾNG ANH, TỪ 8 ĐẾN 10 TỪ VÀ ĐỘC BẢN
-        vi_chars = "àáảãạăằắẳẵặâầấẩẫậèéẻẽẹêềếểễệìíỉĩịòóỏõọôồốổỗộơờớởỡợùúủũụưừứửữựỳýỷỹỵđ"
-        loop_count = 0
-        max_loop_attempts = 8
+        # 6. TITLE RESOLUTION WATERFALL (Candidate Title -> Spoken Headline -> LLM API -> Golden Rule Fallback)
+        clean_en = resolve_segment_title(
+            raw_title=raw_title_en,
+            transcript_text=transcript_text,
+            start_time=start_time,
+            end_time=end_time,
+            seen_titles=seen_titles,
+            api_key=api_key,
+        )
 
-        while True:
-            word_count = count_title_words(clean_en)
-            has_vi = any(c in clean_en.lower() for c in vi_chars)
-            is_duplicate = clean_en.lower() in seen_titles
-
-            if TITLE_MIN_WORDS <= word_count <= TITLE_MAX_WORDS and not has_vi and not is_duplicate:
-                # Đạt chuẩn từ 8 đến 10 từ VÀ 100% Tiếng Anh VÀ KHÔNG TRÙNG -> Thoát vòng lặp!
-                break
-
-            loop_count += 1
-            logger.info(
-                f"Segment {i+1}: Caption '{clean_en}' ({word_count} từ, has_vi={has_vi}, is_duplicate={is_duplicate}) chưa đạt chuẩn {TITLE_MIN_WORDS}-{TITLE_MAX_WORDS} từ Tiếng Anh độc bản. "
-                f"Chạy vòng lặp LLM tạo lại caption (lần {loop_count})..."
-            )
-
-            refine_success = False
-            if api_key and loop_count <= max_loop_attempts:
-                try:
-                    refine_prompt = (
-                        f"Rewrite the following video headline into a natural, high-converting Tabloid headline STRICTLY IN ENGLISH for Facebook Reels / TikTok.\n"
-                        f"CRITICAL MANDATORY REQUIREMENTS:\n"
-                        f"1. MUST BE 100% IN ENGLISH (No Vietnamese words allowed).\n"
-                        f"2. MUST contain STRICTLY between {TITLE_MIN_WORDS} and {TITLE_MAX_WORDS} words ({TITLE_MIN_WORDS} <= word_count <= {TITLE_MAX_WORDS}). Count words carefully!\n"
-                        f"3. DO NOT ADD DUMMY FILLER WORDS (e.g. do NOT append 'REVEALED NOW', 'EXPOSED TRUTH', 'TODAY', or 'CLIP NUMBER').\n"
-                        f"4. The headline MUST be a single natural, complete sentence.\n"
-                        f"Current headline: '{clean_en}'\n"
-                        f"End with an expressive emoji (e.g. 💥, 🔥, ⚡, 😱).\n"
-                        f"Return ONLY the raw English headline string."
-                    )
-                    with _LLM_LOCK:
-                        new_res = _call_gemini_api(refine_prompt, api_key)
-                    new_clean = clean_caption_text(new_res.strip())
-                    new_words_cnt = count_title_words(new_clean)
-                    new_has_vi = any(c in new_clean.lower() for c in vi_chars)
-                    new_duplicate = new_clean.lower() in seen_titles
-
-                    if TITLE_MIN_WORDS <= new_words_cnt <= TITLE_MAX_WORDS and not new_has_vi and not new_duplicate:
-                        clean_en = new_clean
-                        refine_success = True
-                        logger.info(f"Segment {i+1}: Vòng lặp LLM đã tạo caption tiếng Anh thành công ({new_words_cnt} từ): '{clean_en}'")
-                        break
-                except Exception as ex:
-                    logger.warning(f"Lỗi gọi LLM trong vòng lặp refine title: {ex}")
-
-            if not refine_success:
-                # Trích xuất thoại tự nhiên từ transcript thực tế (không bịa title)
-                clean_en = _extract_spoken_headline(transcript_text, start_time, end_time, seen_titles)
-
-        # REJECT SEGMENT nếu title rỗng hoặc không nằm trong mốc 8 - 10 từ
         word_cnt = count_title_words(clean_en)
         if not clean_en or word_cnt < TITLE_MIN_WORDS or word_cnt > TITLE_MAX_WORDS:
-            logger.warning(f"Segment {i+1} ({start_tc}->{end_tc}) bị REJECT do không sinh được tiêu đề hợp lệ {TITLE_MIN_WORDS}-{TITLE_MAX_WORDS} từ ({word_cnt} từ: '{clean_en}')")
+            REJECTION_TRACKER.record(CandidateRejectionReason.TITLE)
+            logger.warning(f"Segment {i+1} ({start_tc}->{end_tc}) bị REJECT TITLE do không sinh được tiêu đề 8-10 từ ('{clean_en}')")
+            continue
+
+        if clean_en.lower() in seen_titles:
+            REJECTION_TRACKER.record(CandidateRejectionReason.DUPLICATE)
+            logger.warning(f"Segment {i+1}: Tiêu đề '{clean_en}' bị trùng, REJECT DUPLICATE!")
             continue
 
         seen_titles.add(clean_en.lower())
@@ -1421,12 +1676,12 @@ def _convert_raw_segments(
             start_time=start_time,
             end_time=end_time,
             title_en=clean_en,
-            title_vi=clean_vi or clean_en,
+            title_vi=clean_en,
             start_timecode=start_tc,
             end_timecode=end_tc,
         ))
 
-    # KÍCH HOẠT BATCH CAPTION REPAIR (1 API Request duy nhất sửa đồng loạt các caption nếu có lỗi)
+    # KÍCH HOẠT BATCH CAPTION REPAIR nếu còn caption chưa chuẩn
     if api_key and segments:
         segments = _repair_caption_batch(segments, api_key)
 

@@ -14,7 +14,8 @@ import hashlib
 import functools
 from collections import deque
 from pathlib import Path
-from typing import List, Tuple, Optional, Dict
+from dataclasses import dataclass
+from typing import List, Tuple, Optional, Dict, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 from loguru import logger
@@ -307,6 +308,15 @@ def _render_chunk_base_layer(
     return composite_1x, word_positions, eff_font_size
 
 
+COLOR_RGBA_MAP: Dict[str, Tuple[int, int, int, int]] = {
+    "yellow": (255, 255, 0, 255),
+    "red": (255, 0, 0, 255),
+    "green": (0, 255, 0, 255),
+    "white": (255, 255, 255, 255),
+    "blue": (0, 128, 255, 255),
+}
+
+
 def generate_graphic_subtitles(
     subtitle_lines: List[SubtitleLine],
     tmp_dir: Path,
@@ -328,7 +338,8 @@ def generate_graphic_subtitles(
 
     font = _get_font(font_name, font_size)
     primary_rgba = (255, 255, 255, 255)
-    highlight_rgba = (0, 255, 0, 255)
+    highlight_key = (highlight_color_name or "yellow").lower()
+    highlight_rgba = COLOR_RGBA_MAP.get(highlight_key, (255, 255, 0, 255))
 
     graphic_results: List[Tuple[Path, float, float]] = []
     frame_count = 0
@@ -474,42 +485,43 @@ def generate_graphic_subtitles(
         del base_1x
         del rendered_frames
 
-        sanitized = []
-        graphic_results.sort(key=lambda x: (x[1], x[2]))
-        for path, s, e in graphic_results:
-            if outcard_start_s is not None:
-                if s >= outcard_start_s:
-                    continue
-                e = min(e, outcard_start_s)
+    # Global Visual State Sanitization & Timeline Continuity (chạy 1 lần duy nhất trên toàn bộ clip)
+    sanitized = []
+    graphic_results.sort(key=lambda x: (x[1], x[2]))
+    for path, s, e in graphic_results:
+        if outcard_start_s is not None:
+            if s >= outcard_start_s:
+                continue
+            e = min(e, outcard_start_s)
 
-            if sanitized:
-                prev_path, prev_s, prev_e = sanitized[-1]
-                # Nếu mốc s của khung sau nhỏ hơn prev_e của khung trước, triệt tiêu đè chữ bằng cách ngắt prev_e = s - 0.001
-                if s < prev_e:
-                    prev_e_new = round(s - 0.001, 3)
-                    if prev_e_new > prev_s + 0.01:
-                        sanitized[-1] = (prev_path, prev_s, prev_e_new)
-                    else:
-                        sanitized.pop()
+        if sanitized:
+            prev_path, prev_s, prev_e = sanitized[-1]
+            # Nếu mốc s của khung sau nhỏ hơn prev_e của khung trước, gối đầu liền kề (prev_e = s) chống đè chữ và chớp nháy
+            if s < prev_e:
+                prev_e_new = round(s, 3)
+                if prev_e_new > prev_s + 0.01:
+                    sanitized[-1] = (prev_path, prev_s, prev_e_new)
+                else:
+                    sanitized.pop()
 
-            if e > s + 0.01:
-                sanitized.append((path, round(s, 3), round(e, 3)))
+        if e > s + 0.01:
+            sanitized.append((path, round(s, 3), round(e, 3)))
 
-        # Cho phép khoảng nghỉ thở tự nhiên (Breathing Pause >= 0.25s) ở cuối các câu thoại để phụ đề nghỉ nhịp không bị đập liên tục
-        final_list = []
-        n = len(sanitized)
-        for i in range(n):
-            path, s, e = sanitized[i]
-            if i < n - 1:
-                next_s = sanitized[i + 1][1]
-                # Chỉ trám khoảng lặng cực ngắn (< 0.22s), chừa 0.25s-0.50s nghỉ nhịp thở giữa các câu thoại
-                if next_s > s and (next_s - e) < 0.22:
-                    e = round(next_s - 0.001, 3)
+    # Cho phép khoảng nghỉ thở tự nhiên (Breathing Pause >= 0.22s) ở cuối các câu thoại để phụ đề nghỉ nhịp không bị đập liên tục
+    final_list = []
+    n = len(sanitized)
+    for i in range(n):
+        path, s, e = sanitized[i]
+        if i < n - 1:
+            next_s = sanitized[i + 1][1]
+            # Trám khoảng lặng cực ngắn (< 0.22s) chống micro-blink, giữ nguyên khoảng nghỉ thở tự nhiên >= 0.22s
+            if next_s > s and (next_s - e) < 0.22:
+                e = round(next_s, 3)
 
-            if e > s + 0.01:
-                final_list.append((path, round(s, 3), round(e, 3)))
+        if e > s + 0.01:
+            final_list.append((path, round(s, 3), round(e, 3)))
 
-        graphic_results = final_list
+    graphic_results = final_list
 
     logger.info(f"Subtitle Stats: subtitle_words={total_words}, estimated_words={estimated_words}, subtitle_chunks={len(chunks)}, highlighted_words={highlighted_count}, emoji_count={emoji_count}")
     logger.info(f"Đã tạo {len(graphic_results)} khung ảnh phụ đề đồ họa PNG Super-Sampling 2X (tổng số PNG: {len(graphic_results)}) mượt căng tại {tmp_dir}")
@@ -528,7 +540,7 @@ def generate_concat_manifest(
     blank_png = tmp_dir / "blank_transparent.png"
     if not blank_png.exists():
         img = Image.new("RGBA", canvas_size, (0, 0, 0, 0))
-        img.save(blank_png, "PNG")
+        img.save(blank_png, "PNG", compress_level=1)
 
     manifest_path = tmp_dir / "g_subs_concat.txt"
     lines = []
@@ -542,6 +554,10 @@ def generate_concat_manifest(
             continue
         if cut_limit is not None:
             e = min(e, cut_limit)
+
+        # Đảm bảo mốc s không lùi về trước current_time
+        if s < current_time:
+            s = current_time
 
         if s > current_time + 0.005:
             gap_dur = s - current_time
@@ -570,66 +586,8 @@ def generate_concat_manifest(
     return manifest_path
 
 
-CENSOR_DICTIONARY = {
-    r"\bSEX\b": "SE*",
-    r"\bSEXUAL\b": "SE*UAL",
-    r"\bSEXY\b": "SE*Y",
-    r"\bKILL\b": "KI*L",
-    r"\bKILLED\b": "KI*LED",
-    r"\bKILLING\b": "KI*LING",
-    r"\bKILLER\b": "KI*LER",
-    r"\bMURDER\b": "MU*DER",
-    r"\bMURDERED\b": "MU*DERED",
-    r"\bDEATH\b": "DE*TH",
-    r"\bDEAD\b": "DE*D",
-    r"\bDIE\b": "D*E",
-    r"\bDIED\b": "D*ED",
-    r"\bSUICIDE\b": "SU*CIDE",
-    r"\bFUCK\b": "F*CK",
-    r"\bFUCKING\b": "F*CKING",
-    r"\bFUCKED\b": "F*CKED",
-    r"\bSHIT\b": "SH*T",
-    r"\bBITCH\b": "BI*CH",
-    r"\bASS\b": "A*S",
-    r"\bASSHOLE\b": "A*SHOLE",
-    r"\bDICK\b": "DI*K",
-    r"\bPENIS\b": "PE*IS",
-    r"\bVAGINA\b": "VA*INA",
-    r"\bPORN\b": "PO*N",
-    r"\bPORNO\b": "PO*NO",
-    r"\bNUDE\b": "NU*E",
-    r"\bNUDITY\b": "NU*ITY",
-    r"\bNAKED\b": "NA*ED",
-    r"\bRAPE\b": "RA*E",
-    r"\bRAPED\b": "RA*ED",
-    r"\bRAPIST\b": "RA*IST",
-    r"\bABUSE\b": "AB*SE",
-    r"\bABUSED\b": "AB*SED",
-    r"\bSLUT\b": "SL*T",
-    r"\bWHORE\b": "WH*RE",
-    r"\bDRUG\b": "DR*G",
-    r"\bDRUGS\b": "DR*GS",
-    r"\bCOCAINE\b": "CO*AINE",
-    r"\bHEROIN\b": "HE*OIN",
-    r"\bWEED\b": "WE*D",
-    r"\bGUN\b": "G*N",
-    r"\bGUNS\b": "G*NS",
-    r"\bSHOOT\b": "SH*OT",
-    r"\bSHOT\b": "SH*T",
-    r"\bSHOOTING\b": "SH*OTING",
-    r"\bPEDO\b": "PE*O",
-    r"\bPEDOPHILE\b": "PE*OPHILE",
-}
+from .censor import CENSOR_DICTIONARY, censor_sensitive_words
 
-
-def censor_sensitive_words(text: str) -> str:
-    """Thay thế các từ nhạy cảm không chuẩn mực bằng ký tự * (ví dụ SEX -> SE*, KILL -> KI*L)."""
-    if not text:
-        return ""
-    result = text
-    for pattern, replacement in CENSOR_DICTIONARY.items():
-        result = re.sub(pattern, replacement, result, flags=re.IGNORECASE)
-    return result
 
 
 class EmojiTracker:
@@ -759,6 +717,7 @@ def clean_caption_text(text: str) -> str:
     text_no_emoji = EMOJI_AND_FORMAT_PATTERN.sub("", text).strip()
 
     text = re.sub(r"\*{2,}", "", text_no_emoji)
+    text = re.sub(r"(?<!\w)\*+|\*+(?!\w)", "", text)
     text = text.replace("__", "").replace("`", "")
     text = text.replace("’", "'").replace("‘", "'").replace("”", '"').replace("“", '"').replace("—", "-")
     text = text.strip('"\' ')
@@ -783,6 +742,43 @@ def clean_caption_text(text: str) -> str:
     return ensure_caption_has_emoji(clean)
 
 
+def capitalize_sentence_start(text: str) -> str:
+    """Viết hoa chữ cái đầu tiên trong câu / caption xuất ra bên ngoài.
+    
+    Bảo toàn emoji, dấu ngoặc hoặc ký tự đặc biệt ở đầu nếu có.
+    Ví dụ:
+        "woman drinks $2,000 wine 🍷" -> "Woman drinks $2,000 wine 🍷"
+        "“woman drinks wine” 🍷" -> "“Woman drinks wine” 🍷"
+    """
+    if not text:
+        return text
+
+    for i, char in enumerate(text):
+        if char.isalpha():
+            return text[:i] + char.upper() + text[i + 1:]
+
+    return text
+
+
+def format_external_caption(text: str) -> str:
+    """Chuẩn hóa tiêu đề/caption xuất ra file bên ngoài (Sentence Case + Censor + Emoji)."""
+    if not text:
+        return ""
+    cleaned = clean_caption_text(text)
+    censored = censor_sensitive_words(cleaned)
+    # Tách phần chữ body và phần emoji ở cuối
+    emoji_matches = EMOJI_AND_FORMAT_PATTERN.findall(censored)
+    body_text = EMOJI_AND_FORMAT_PATTERN.sub("", censored).strip()
+    
+    # Ép body_text về dạng chữ thường trước, sau đó viết hoa chữ cái đầu tiên
+    body_capitalized = capitalize_sentence_start(body_text.lower())
+    
+    if emoji_matches:
+        return f"{body_capitalized} {' '.join(emoji_matches)}".strip()
+    return body_capitalized
+
+
+
 def clean_caption_text_for_frame(text: str) -> str:
     """Làm sạch rác LLM và LOẠI BỎ 100% Emojis & ký tự điều khiển ẩn cho khung hình video (Top Caption PNG layer trong video)."""
     if not text:
@@ -791,7 +787,9 @@ def clean_caption_text_for_frame(text: str) -> str:
     text = EMOJI_AND_FORMAT_PATTERN.sub("", text)
     text = re.sub(r"[\x00-\x1F\x7F-\x9F\u200B\u200C\u200D\u200E\u200F\u202E\u2060\u2061\u2062\u2063\u20E3\uFEFF]", "", text).strip()
 
-    text = text.replace("**", "").replace("*", "").replace("__", "").replace("`", "")
+    text = re.sub(r"\*{2,}", "", text)
+    text = re.sub(r"(?<!\w)\*+|\*+(?!\w)", "", text)
+    text = text.replace("__", "").replace("`", "")
     text = text.replace("’", "'").replace("‘", "'").replace("”", '"').replace("“", '"').replace("—", "-")
     text = text.strip('"\' ')
 
@@ -816,89 +814,152 @@ def ensure_caption_8_to_10_words(
     target_min: int = 8,
     target_max: int = 10,
 ) -> list:
-    """Bóc tách danh sách từ hiển thị cho Top Caption PNG trong video frame (Không chứa emoji, giữ nguyên 100% văn bản tiếng Anh từ AI)."""
+    """Bóc tách danh sách từ hiển thị cho Top Caption PNG trong video frame.
+    
+    Bảo toàn 100% văn bản tiếng Anh từ AI/người dùng, không cắt bớt từ, không tự ý xóa từ lặp tự nhiên.
+    """
     clean_t = clean_caption_text_for_frame(title_text).replace('"', '').strip()
     words = clean_t.split()
-    if (not words or len(words) < 4) and fallback_text:
+    if not words and fallback_text:
         words = clean_caption_text_for_frame(fallback_text).replace('"', '').strip().split()
-
-    if len(words) > target_max:
-        words = words[:target_max]
-
-    # Loại bỏ các từ trùng lặp đứng cạnh nhau
-    dedup = []
-    for w in words:
-        if not dedup or w.upper() != dedup[-1].upper():
-            dedup.append(w)
-    words = dedup
-
-    if len(words) > target_max:
-        words = words[:target_max]
 
     return words
 
 
-def format_top_caption_lines(words: list, font: ImageFont.FreeTypeFont, max_text_w: int) -> list:
-    """Tách các từ thành 1, 2 hoặc 3 dòng cân đối đẹp mắt (Style 4 & Style 3)."""
-    if not words:
-        return []
+TARGET_TOP_CAPTION_RATIO = 0.88
 
-    def get_w(s):
+
+@dataclass
+class CaptionLayoutResult:
+    lines: List[str]
+    constraint_unmet: bool
+    ratio: float
+    w1: int
+    w2: int
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self.lines)
+
+    def __len__(self) -> int:
+        return len(self.lines)
+
+    def __getitem__(self, index: int) -> str:
+        return self.lines[index]
+
+
+def format_top_caption_lines(
+    words: list,
+    font: ImageFont.FreeTypeFont,
+    max_text_w: int,
+) -> CaptionLayoutResult:
+    """Tách các từ thành 2 dòng tiêu đề chuẩn Inverted Pyramid (w1 < w2, không có dấu ngoặc kép).
+    
+    Sử dụng Soft Constraint: Ưu tiên w1 < w2. Nếu bất đối xứng không thể chia w1 < w2 (ví dụ "Congratulations, bro!"),
+    tự động fallback sang cách chia w1 >= w2 cân bằng nhất, đảm bảo text luôn được render trọn vẹn và không crash.
+    """
+    if not words:
+        return CaptionLayoutResult(lines=[], constraint_unmet=True, ratio=1.0, w1=0, w2=0)
+
+    def get_w(s: str) -> int:
         bbox = font.getbbox(s)
         return bbox[2] - bbox[0]
 
-    all_str = f'"{" ".join(words)}"'
-
-    # 1. Nếu chỉ có ít hơn 6 từ và ngắn hơn 75% max_text_w, giữ trên 1 dòng
-    if len(words) < 6 and get_w(all_str) <= (max_text_w * 0.75):
-        return [all_str]
+    # Nếu chỉ có 1 từ duy nhất, render trên 1 dòng
+    if len(words) == 1:
+        w = get_w(words[0])
+        return CaptionLayoutResult(
+            lines=[words[0]],
+            constraint_unmet=False,
+            ratio=1.0,
+            w1=w,
+            w2=w,
+        )
 
     n = len(words)
+    candidates = []
 
-    # 2. Thử tách thành 2 dòng cân đối đẹp mắt
-    candidates_2 = []
+    # Tạo tất cả candidate splits i ∈ [1, n-1] mà KHÔNG bao gồm dấu ngoặc kép ""
     for i in range(1, n):
         l1_words = words[:i]
         l2_words = words[i:]
-        str1 = f'"{" ".join(l1_words)}'
-        str2 = f'{" ".join(l2_words)}"'
+        str1 = " ".join(l1_words)
+        str2 = " ".join(l2_words)
 
         w1 = get_w(str1)
         w2 = get_w(str2)
 
-        if w1 <= max_text_w and w2 <= max_text_w:
-            candidates_2.append((abs(w1 - w2), abs(len(l1_words) - len(l2_words)), [str1, str2], max(w1, w2)))
+        candidates.append({
+            "str1": str1,
+            "str2": str2,
+            "l1_words": l1_words,
+            "l2_words": l2_words,
+            "w1": w1,
+            "w2": w2,
+        })
 
-    if candidates_2:
-        candidates_2.sort(key=lambda x: (x[0], x[1], x[3]))
-        return candidates_2[0][2]
+    # Tầng 1: Ưu tiên Soft Constraint w1 < w2 (Inverted Pyramid)
+    valid_shape_candidates = [
+        c for c in candidates
+        if c["w1"] > 0 and c["w2"] > 0 and c["w1"] < c["w2"]
+    ]
 
-    # 3. Nếu chuỗi dài (>= 9 từ) làm 2 dòng bị quá rộng, ngắt thành 3 dòng cân đối
-    candidates_3 = []
-    for i in range(1, n - 1):
-        for j in range(i + 1, n):
-            l1_words = words[:i]
-            l2_words = words[i:j]
-            l3_words = words[j:]
-            str1 = f'"{" ".join(l1_words)}'
-            str2 = f'{" ".join(l2_words)}'
-            str3 = f'{" ".join(l3_words)}"'
+    if valid_shape_candidates:
+        # Nếu có các candidate vừa khít trong max_text_w, ưu tiên nhóm này trước
+        fitting = [c for c in valid_shape_candidates if c["w1"] <= max_text_w and c["w2"] <= max_text_w]
+        pool = fitting if fitting else valid_shape_candidates
 
-            w1, w2, w3 = get_w(str1), get_w(str2), get_w(str3)
+        best = min(
+            pool,
+            key=lambda c: (
+                abs(TARGET_TOP_CAPTION_RATIO - (c["w1"] / c["w2"])),
+                abs(len(c["l1_words"]) - len(c["l2_words"])),
+                abs(c["w1"] - c["w2"]),
+            ),
+        )
+        return CaptionLayoutResult(
+            lines=[best["str1"], best["str2"]],
+            constraint_unmet=False,
+            ratio=best["w1"] / best["w2"],
+            w1=best["w1"],
+            w2=best["w2"],
+        )
 
-            if w1 <= max_text_w and w2 <= max_text_w and w3 <= max_text_w:
-                diff = max(w1, w2, w3) - min(w1, w2, w3)
-                candidates_3.append((diff, abs(len(l1_words) - len(l3_words)), [str1, str2, str3], max(w1, w2, w3)))
+    # Tầng 2: Graceful Fallback khi từ bất đối xứng không thể chia w1 < w2 (ví dụ "Congratulations, bro!")
+    fallback_candidates = [c for c in candidates if c["w1"] > 0 and c["w2"] > 0]
+    if fallback_candidates:
+        fitting_fb = [c for c in fallback_candidates if c["w1"] <= max_text_w and c["w2"] <= max_text_w]
+        pool = fitting_fb if fitting_fb else fallback_candidates
 
-    if candidates_3:
-        candidates_3.sort(key=lambda x: (x[0], x[1], x[2]))
-        return candidates_3[0][2]
+        best = min(
+            pool,
+            key=lambda c: (
+                abs(1.0 - (c["w1"] / c["w2"])),
+                abs(len(c["l1_words"]) - len(c["l2_words"])),
+                abs(c["w1"] - c["w2"]),
+            ),
+        )
+        return CaptionLayoutResult(
+            lines=[best["str1"], best["str2"]],
+            constraint_unmet=True,
+            ratio=best["w1"] / best["w2"],
+            w1=best["w1"],
+            w2=best["w2"],
+        )
 
-    # Fallback chia đôi từ
+    # Fallback dự phòng chia đôi từ trung điểm
     mid = max(1, n // 2)
-    l1 = f'"{" ".join(words[:mid])}'
-    l2 = f'{" ".join(words[mid:])}"'
-    return [l1, l2]
+    str1 = " ".join(words[:mid])
+    str2 = " ".join(words[mid:])
+    w1 = get_w(str1)
+    w2 = get_w(str2)
+    ratio = (w1 / w2) if w2 > 0 else 1.0
+    return CaptionLayoutResult(
+        lines=[str1, str2],
+        constraint_unmet=True,
+        ratio=ratio,
+        w1=w1,
+        w2=w2,
+    )
 
 
 def generate_top_caption_layer(
@@ -909,12 +970,18 @@ def generate_top_caption_layer(
     fallback_text: str = "",
     style_index: int = 4,
 ) -> Optional[Path]:
-    """Tạo file PNG chứa Top Caption cho Canvas 3:4 và 1:1 theo từng Phong cách (Style 3 Nền Vàng, Style 4 White Badge, Style 5 Dải Nền Xanh Dương)."""
+    """Tạo file PNG chứa Top Caption cho Canvas 3:4 và 1:1 theo từng Phong cách.
+    
+    Bảo toàn 100% từ, không có "", ưu tiên 2 dòng w1 < w2, tự động dò font size bằng Binary Search
+    và auto-scale mượt mà nếu gặp từ hoặc câu siêu dài.
+    """
     if not title_text:
         return None
     
-    # Cho cả Canvas 1:1 (Style 3) và Canvas 3:4 (Style 4 & 5), dùng 7-8 từ để hiển thị chuẩn 2 dòng cân đối
-    words = ensure_caption_8_to_10_words(title_text, fallback_text, target_min=7, target_max=8)
+    # Bảo toàn 100% từ, không cắt bớt
+    words = ensure_caption_8_to_10_words(title_text, fallback_text)
+    if not words:
+        return None
 
     margin_x = 40
     pad_w = 32
@@ -922,36 +989,55 @@ def generate_top_caption_layer(
     radius = 20
     max_text_w = canvas_size[0] - margin_x * 2 - pad_w * 2  # 936px
 
-    # Tự động chọn font size cân đối từ 46pt xuống 22pt sao cho vừa khít max_text_w
-    font = None
-    lines = []
+    def evaluate_fsize(fsize: int):
+        test_f = SubtitleLayoutEngine.get_font("Montserrat-Bold", fsize)
+        test_layout = format_top_caption_lines(words, test_f, max_text_w)
+        overflow = any((test_f.getbbox(l)[2] - test_f.getbbox(l)[0]) > max_text_w for l in test_layout.lines)
+        return test_f, test_layout, overflow
 
-    # Ưu tiên tuyệt đối tìm font size ngắt vừa khít <= 2 dòng cân đối
-    for fsize in range(46, 22, -2):
-        test_font = SubtitleLayoutEngine.get_font("Montserrat-Bold", fsize)
+    # Tối ưu hiệu năng: Tìm kiếm nhị phân (Binary Search) cho Font Size trong dải [16, 46]
+    low = 16
+    high = 46
+    best_font = None
+    best_layout = None
 
-        test_lines = format_top_caption_lines(words, test_font, max_text_w)
-        overflow = any((test_font.getbbox(l)[2] - test_font.getbbox(l)[0]) > max_text_w for l in test_lines)
+    while low <= high:
+        mid = (low + high) // 2
+        test_f, test_layout, overflow = evaluate_fsize(mid)
+        if not overflow:
+            # Vừa vặn không bị tràn khung -> ghi nhận và thử tìm font lớn hơn
+            best_font = test_f
+            best_layout = test_layout
+            low = mid + 1
+        else:
+            # Bị tràn khung -> phải giảm font size
+            high = mid - 1
 
-        if len(test_lines) <= 2 and not overflow:
-            font = test_font
-            lines = test_lines
-            break
+    # Nếu tìm được font vừa vặn trong dải [16, 46]
+    if best_font is not None and best_layout is not None:
+        font = best_font
+        layout_res = best_layout
+        lines = best_layout.lines
+    else:
+        # Fallback cấp cao: nếu ở 16pt vẫn bị tràn (ví dụ siêu từ không khoảng trắng hoặc câu 30 từ)
+        f16, layout16, _ = evaluate_fsize(16)
+        font = f16
+        layout_res = layout16
+        lines = layout16.lines
 
-    if font is None:
-        for fsize in range(46, 22, -2):
-            test_font = SubtitleLayoutEngine.get_font("Montserrat-Bold", fsize)
-            test_lines = format_top_caption_lines(words, test_font, max_text_w)
-            overflow = any((test_font.getbbox(l)[2] - test_font.getbbox(l)[0]) > max_text_w for l in test_lines)
+        max_line_w = max((font.getbbox(l)[2] - font.getbbox(l)[0]) for l in lines) if lines else 0
+        if max_line_w > max_text_w and max_line_w > 0:
+            scale_factor = max_text_w / float(max_line_w)
+            scaled_fsize = max(8, int(16 * scale_factor * 0.95))
+            font = SubtitleLayoutEngine.get_font("Montserrat-Bold", scaled_fsize)
+            layout_res = format_top_caption_lines(words, font, max_text_w)
+            lines = layout_res.lines
+            logger.info(f"Top caption auto-scaled to {scaled_fsize}pt for long text fitting.")
 
-            if not overflow:
-                font = test_font
-                lines = test_lines
-                break
-
-    if font is None:
-        font = SubtitleLayoutEngine.get_font("Montserrat-Bold", 26)
-        lines = format_top_caption_lines(words, font, max_text_w)
+    if layout_res and layout_res.constraint_unmet:
+        logger.info(
+            f"Top caption soft constraint note: w1 >= w2 used (w1={layout_res.w1}, w2={layout_res.w2}, ratio={layout_res.ratio:.3f})"
+        )
 
     img = Image.new("RGBA", canvas_size, (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
@@ -1052,5 +1138,5 @@ def generate_top_caption_layer(
         logger.info(f"Đã tạo PNG Top Caption Stepped White Badge ({len(lines)} Dòng - Style 4): {output_png}")
 
     output_png.parent.mkdir(parents=True, exist_ok=True)
-    img.save(output_png, "PNG")
+    img.save(output_png, "PNG", compress_level=1)
     return output_png

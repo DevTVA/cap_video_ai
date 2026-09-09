@@ -17,6 +17,7 @@ env_output = os.getenv("OUTPUT_DIR")
 
 DEFAULT_INPUT_DIR = Path(env_input) if env_input else Path(r"E:\output")
 DEFAULT_OUTPUT_DIR = Path(env_output) if env_output else Path(r"E:\output\final_clips")
+DEFAULT_STYLE_MAPPING = "1-36:3,37-42:4,43-48:5"
 
 
 @dataclass
@@ -25,7 +26,7 @@ class AppConfig:
 
     input_dir: Path = field(default_factory=lambda: DEFAULT_INPUT_DIR)
     output_dir: Path = field(default_factory=lambda: DEFAULT_OUTPUT_DIR)
-    style_mapping_str: str = "1-12:2,13-24:4,25-36:3,37-48:5"
+    style_mapping_str: str = DEFAULT_STYLE_MAPPING
     max_clips_per_video: int = 2
     max_workers: int = 2
     whisper_model: str = field(default_factory=lambda: os.getenv("WHISPER_MODEL", "base.en"))
@@ -37,6 +38,7 @@ class AppConfig:
     max_render_workers: int = 2
     force_rerender: bool = False
     outcard_path: Optional[Path] = field(default_factory=lambda: Path(os.getenv("OUTCARD_PATH")) if os.getenv("OUTCARD_PATH") else None)
+    subtitle_align: str = "auto"
 
     def __post_init__(self):
         if not self.input_dir:

@@ -85,10 +85,13 @@ def cut_and_render_clip(
     start_hms = format_timecode_hms(start_time)
     duration_hms = format_timecode_hms(duration)
 
-    inputs = [
+    inputs = []
+    if enable_gpu:
+        inputs.extend(["-hwaccel", "auto"])
+    inputs.extend([
         "-ss", start_hms,
         "-i", str(video_path),
-    ]
+    ])
     current_input_idx = 1
 
     outcard_dur = 2.113

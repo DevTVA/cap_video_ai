@@ -8,7 +8,7 @@ import click
 from rich.console import Console
 from rich.panel import Panel
 
-from ..config import AppConfig, DEFAULT_INPUT_DIR, DEFAULT_OUTPUT_DIR
+from ..config import AppConfig, DEFAULT_INPUT_DIR, DEFAULT_OUTPUT_DIR, DEFAULT_STYLE_MAPPING
 from ..pipeline import PipelineOrchestrator
 
 console = Console()
@@ -32,14 +32,14 @@ console = Console()
 @click.option(
     "--style-map",
     "-s",
-    default="1-12:2,13-24:4,25-36:3,37-48:5",
-    help="Mapping dải folder -> phong cách. Ví dụ: '1-12:2,13-24:4,25-36:3,37-48:5'",
+    default=DEFAULT_STYLE_MAPPING,
+    help=f"Mapping dải folder -> phong cách (mặc định: '{DEFAULT_STYLE_MAPPING}').",
 )
 @click.option(
     "--max-clips",
-    default=3,
+    default=2,
     type=int,
-    help="Số lượng clip tối đa cắt từ 1 video gốc (mặc định: 3).",
+    help="Số lượng clip tối đa cắt từ 1 video gốc (mặc định: 2).",
 )
 @click.option(
     "--max-workers",
@@ -82,9 +82,15 @@ console = Console()
 )
 @click.option(
     "--render-workers",
-    default=4,
+    default=2,
     type=int,
-    help="Số lượng luồng render clip đồng thời (mặc định: 4).",
+    help="Số lượng luồng render clip đồng thời (mặc định: 2).",
+)
+@click.option(
+    "--subtitle-align",
+    default="auto",
+    type=click.Choice(["auto", "fast", "deep"]),
+    help="Chế độ căn chỉnh phụ đề: 'auto' (mặc định: align chuẩn xác theo audio bằng Whisper), 'fast' (nội suy mốc từ nhanh theo số ký tự, bỏ qua Whisper), 'deep' (bắt buộc Whisper align).",
 )
 @click.option(
     "--force",
@@ -106,6 +112,7 @@ def main_cli(
     gpu: bool,
     preset: str,
     render_workers: int,
+    subtitle_align: str,
     force: bool,
 ):
     """Entry point cho CLI."""
@@ -138,6 +145,7 @@ def main_cli(
         use_gpu=gpu,
         ffmpeg_preset=preset,
         max_render_workers=render_workers,
+        subtitle_align=subtitle_align,
         force_rerender=force,
     )
 

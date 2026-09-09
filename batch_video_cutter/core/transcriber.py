@@ -5,10 +5,48 @@ với word-level timestamps. Xử lý theo stream, không load toàn bộ vào R
 """
 
 from dataclasses import dataclass, field
+from enum import Enum
 from pathlib import Path
 from typing import List, Optional
 
 from loguru import logger
+
+
+class OverlapType(str, Enum):
+    """Phân loại quan hệ overlap giữa các subtitle segment."""
+    NONE = "none"
+    EXACT_DUPLICATE = "exact_duplicate"
+    ROLLING_CAPTION = "rolling_caption"
+    TRUE_CONFLICT = "true_conflict"
+
+
+def classify_overlap(seg_a: "SentenceSegment", seg_b: "SentenceSegment") -> OverlapType:
+    """Phân loại quan hệ overlap giữa 2 segment liên tiếp."""
+    # 1. Không có overlap thời gian
+    if seg_b.start >= seg_a.end - 0.01:
+        return OverlapType.NONE
+
+    # Chuẩn hóa text để so sánh
+    text_a = seg_a.text.strip().lower()
+    text_b = seg_b.text.strip().lower()
+
+    # 2. Exact Duplicate: text giống nhau và timing trùng/gần trùng
+    if text_a == text_b and abs(seg_a.start - seg_b.start) < 0.5:
+        return OverlapType.EXACT_DUPLICATE
+
+    # 3. Rolling Caption / Incremental Caption:
+    # Câu B mở rộng hoặc kế thừa nội dung câu A (rolling prefix/suffix)
+    words_a = text_a.split()
+    words_b = text_b.split()
+    if words_a and words_b:
+        if text_b.startswith(text_a):
+            return OverlapType.ROLLING_CAPTION
+        for k in range(min(len(words_a), len(words_b)), 0, -1):
+            if words_a[-k:] == words_b[:k]:
+                return OverlapType.ROLLING_CAPTION
+
+    # 4. True Conflict
+    return OverlapType.TRUE_CONFLICT
 
 
 @dataclass
@@ -166,10 +204,10 @@ import re
 
 
 def _parse_srt_file(srt_path: Path) -> List[SentenceSegment]:
-    """Parse file phụ đề chuẩn SRT thành các SentenceSegment."""
+    """Parse file phụ đề chuẩn SRT thành các SentenceSegment có phân loại OverlapType."""
     content = srt_path.read_text(encoding="utf-8", errors="replace")
     blocks = content.strip().split("\n\n")
-    segments: List[SentenceSegment] = []
+    raw_segments: List[SentenceSegment] = []
     tc_pattern = re.compile(r'(\d{2}):(\d{2}):(\d{2})[,.](\d{3})\s*-->\s*(\d{2}):(\d{2}):(\d{2})[,.](\d{3})')
     for b in blocks:
         lines = [l.strip() for l in b.splitlines() if l.strip()]
@@ -183,14 +221,58 @@ def _parse_srt_file(srt_path: Path) -> List[SentenceSegment]:
                     text_idx = lines.index(l) + 1
                     text = " ".join(lines[text_idx:])
                     if text.strip():
-                        segments.append(SentenceSegment(
+                        raw_segments.append(SentenceSegment(
                             text=text.strip(),
                             start=start,
                             end=end,
                             words=[],
                         ))
                     break
-    return segments
+
+    if not raw_segments:
+        return []
+
+    # Sắp xếp monotonic theo start time để xử lý các block bị out-of-order
+    raw_segments.sort(key=lambda s: (s.start, s.end))
+
+    # Chuẩn hóa mốc thời gian & phân loại overlap
+    normalized_segments: List[SentenceSegment] = []
+    n = len(raw_segments)
+    for i in range(n):
+        curr = raw_segments[i]
+
+        # Sửa invalid timestamp: end <= start theo ngữ cảnh
+        if curr.end <= curr.start:
+            next_start = raw_segments[i + 1].start if i < n - 1 else None
+            if next_start is not None and next_start > curr.start + 0.05:
+                curr.end = min(curr.start + 0.5, next_start - 0.01)
+            else:
+                curr.end = curr.start + 0.5
+
+        if curr.end <= curr.start:
+            # Vẫn invalid -> Drop invalid segment
+            continue
+
+        if not normalized_segments:
+            normalized_segments.append(curr)
+            continue
+
+        prev = normalized_segments[-1]
+        overlap_type = classify_overlap(prev, curr)
+
+        if overlap_type == OverlapType.EXACT_DUPLICATE:
+            # Bỏ qua block trùng lặp hoàn toàn
+            continue
+        elif overlap_type == OverlapType.ROLLING_CAPTION:
+            # Rolling caption: bảo toàn timing hợp lệ của câu prev (không cắt prev.end = curr.start)
+            normalized_segments.append(curr)
+        elif overlap_type == OverlapType.TRUE_CONFLICT:
+            # Overlap xung đột thực sự: giữ cả 2 segment với timestamp hợp lệ của từng câu
+            normalized_segments.append(curr)
+        else:
+            normalized_segments.append(curr)
+
+    return normalized_segments
 
 
 def _parse_subtitles_txt_file(txt_path: Path) -> List[SentenceSegment]:
@@ -335,22 +417,72 @@ def align_existing_subtitles_with_whisper(
         return existing_result
 
 
+def estimate_words_for_subtitles(existing_result: TranscriptResult) -> TranscriptResult:
+    """Nội suy word timestamps cho phụ đề SRT bằng Char-Weighted Alignment.
+    
+    Phân bổ thời lượng theo độ dài từ và dấu câu.
+    Bảo đảm:
+    - Loại bỏ hoàn toàn từ có zero-duration (end <= start).
+    - Mốc thời gian đơn điệu tăng dần trong từng segment: start_k < end_k <= start_{k+1}.
+    - Gán timing_source = 'estimated' cho từng WordSegment và TranscriptResult.
+    """
+    from ..utils.subtitle import fallback_estimate_word_timings
+
+    for seg in existing_result.segments:
+        if not seg.words:
+            raw_words = fallback_estimate_word_timings(seg.text, seg.start, seg.end)
+            seg_words: List[WordSegment] = []
+            for w, ws, we in raw_words:
+                ws_r = round(ws, 4)
+                we_r = round(we, 4)
+                if we_r > ws_r + 0.001:  # Loại bỏ zero-duration
+                    seg_words.append(WordSegment(
+                        word=w,
+                        start=ws_r,
+                        end=we_r,
+                        probability=1.0,
+                        timing_source="estimated",
+                    ))
+
+            # Bảo đảm monotonic trong từng segment
+            for iw in range(len(seg_words) - 1):
+                if seg_words[iw].end > seg_words[iw + 1].start:
+                    seg_words[iw].end = seg_words[iw + 1].start
+                if seg_words[iw].end <= seg_words[iw].start:
+                    seg_words[iw].end = round(seg_words[iw].start + 0.01, 4)
+
+            seg.words = seg_words
+
+    existing_result.has_word_timestamps = True
+    existing_result.timestamp_source = "estimated"
+    return existing_result
+
+
 def transcribe_video(
     video_path: Path,
     model_name: str = "base.en",
     device: str = "auto",
     compute_type: str = "auto",
+    subtitle_align: str = "auto",
+    use_cache: bool = True,
 ) -> TranscriptResult:
     """Chuyển đổi audio từ video thành text với word-level timestamps.
 
     Sử dụng faster-whisper để xử lý. Tự động extract audio từ video.
     Xử lý theo stream — KHÔNG load toàn bộ audio vào RAM.
 
+    Hỗ trợ 3 chế độ subtitle_align:
+    - 'auto': Mặc định. Tự động align SRT/txt có sẵn với audio bằng Whisper để đảm bảo 100% khớp nhịp giọng nói. Nếu không có SRT, chạy Whisper.
+    - 'fast': Buộc dùng fast Char-Weighted alignment cho SRT/txt (gán timing_source='estimated', bỏ qua Whisper để tối đa tốc độ).
+    - 'deep': Buộc dùng Whisper audio stream alignment cho SRT/txt (gán timing_source='whisper').
+
     Args:
         video_path: Đường dẫn tới file video.
         model_name: Tên model Whisper (ví dụ: "base.en", "small.en").
         device: Thiết bị xử lý ("cpu" hoặc "cuda").
         compute_type: Kiểu tính toán ("int8", "float16", "float32").
+        subtitle_align: Chế độ căn chỉnh phụ đề ("auto", "fast", "deep").
+        use_cache: Kích hoạt multi-factor disk cache (.cache/transcripts/).
 
     Returns:
         TranscriptResult chứa segments, words, language.
@@ -364,18 +496,46 @@ def transcribe_video(
     if not video_path.exists():
         raise FileNotFoundError(f"Video không tồn tại: {video_path}")
 
-    # Ưu tiên kiểm tra và nạp file phụ đề có sẵn trong folder
+    from .cache_manager import (
+        compute_transcript_cache_key,
+        get_cached_transcript,
+        save_cached_transcript,
+    )
+
+    # 1. Kiểm tra Multi-Factor Transcript Cache trên đĩa
+    cache_key = compute_transcript_cache_key(video_path, whisper_model=model_name, language="en")
+    if use_cache:
+        cached = get_cached_transcript(cache_key)
+        if cached is not None:
+            # Nếu người dùng chạy ở chế độ auto hoặc deep, mà cache lại là 'estimated' -> Bỏ qua cache ước lượng để chạy Whisper align thật
+            if subtitle_align in ("auto", "deep") and getattr(cached, "timestamp_source", "whisper") == "estimated":
+                logger.info(f"🔄 Cache transcript hiện tại là bản ước lượng (estimated). Chế độ '{subtitle_align}' yêu cầu Whisper align thật -> Bỏ qua cache ước lượng để căn chỉnh chính xác theo audio.")
+            else:
+                logger.info(f"⚡ [Cache Hit] Nạp transcript từ cache ({cached.timestamp_source}): {cache_key[:12]}... (bỏ qua bóc băng)")
+                return cached
+
+    # 2. Ưu tiên kiểm tra và nạp file phụ đề có sẵn trong folder
     existing_result = try_parse_existing_subtitles(video_path)
     if existing_result:
         if not existing_result.has_word_timestamps:
-            logger.info("⚡ File SRT/txt có sẵn chưa có mốc từ (word timestamps). Đang align với audio bằng Whisper...")
-            existing_result = align_existing_subtitles_with_whisper(
-                existing_result,
-                video_path,
-                model_name=model_name,
-                device=device,
-                compute_type=compute_type,
-            )
+            if subtitle_align == "fast":
+                logger.info("⚡ [Fast Subtitle Mode] Tự động suy biến mốc từ cho SRT bằng Char-Weighted Alignment (timing_source='estimated'). Bỏ qua Whisper!")
+                res = estimate_words_for_subtitles(existing_result)
+                if use_cache:
+                    save_cached_transcript(cache_key, res, video_path, whisper_model="srt_estimated")
+                return res
+            else:  # "auto" và "deep": Ưu tiên Whisper audio stream alignment để đảm bảo 100% khớp nhịp giọng nói
+                logger.info(f"🔍 [{subtitle_align.upper()} Subtitle Alignment] Đang align SRT với audio bằng Whisper để khớp từng mili-giây với giọng nói thật...")
+                res = align_existing_subtitles_with_whisper(
+                    existing_result,
+                    video_path,
+                    model_name=model_name,
+                    device=device,
+                    compute_type=compute_type,
+                )
+                if use_cache:
+                    save_cached_transcript(cache_key, res, video_path, whisper_model=model_name)
+                return res
         return existing_result
 
     logger.info(f"Bắt đầu transcribe bằng Whisper: {video_path.name}")
@@ -438,12 +598,19 @@ def transcribe_video(
         f"{sum(len(s.words) for s in all_segments)} words"
     )
 
-    return TranscriptResult(
+    res = TranscriptResult(
         segments=all_segments,
         language=info.language,
         duration=info.duration,
         full_text=full_text,
+        has_word_timestamps=True,
+        timestamp_source="whisper",
     )
+
+    if use_cache:
+        save_cached_transcript(cache_key, res, video_path, whisper_model=model_name)
+
+    return res
 
 
 def format_transcript_for_llm(
