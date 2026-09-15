@@ -110,13 +110,14 @@
   3. Kiểm tra `constraint_unmet` để phát hiện fallback layout và kiểm tra tỉ lệ `ratio = w1 / w2`.
 - **Files liên quan**: `batch_video_cutter/utils/graphic_subtitle.py`, `tests/test_top_caption_layout.py`
 
-### Cấu Hình Range Mapping Phong Cách Cho Folder (Chuẩn 1-36:3, 37-42:4, 43-48:5)
-- **Ngày**: 2026-09-06
+### Cấu Hình Range Mapping Phong Cách Cho Folder (Chuẩn 1-24:3, 25-42:5, 43-48:4)
+- **Ngày**: 2026-09-14
 - **Bước thực hiện**:
-  1. Khai báo chuỗi mapping phong cách trong `style_mapping_str` của `config.py` (`1-36:3,37-42:4,43-48:5`): Folders 1-36 (Style 3 Canvas 1:1 dải vàng), 37-42 (Style 4 Canvas 3:4 white badge), 43-48 (Style 5 Canvas 1:1 dải xanh).
-  2. Chạy `python -m pytest tests/test_style_mapping.py` để xác thực phân giải chính xác từng style instance.
-  3. Đồng bộ cờ `--style-map` / `-s` trong `cli.py` khi muốn ghi đè cấu hình dòng lệnh.
-- **Files liên quan**: `batch_video_cutter/config.py`, `tests/test_style_mapping.py`, `batch_video_cutter/ui/cli.py`
+  1. Khai báo chuỗi mapping phong cách trong `DEFAULT_STYLE_MAPPING` của `config.py` (`1-24:3,25-42:5,43-48:4`): Folders 1-24 (Style 3 Canvas 1:1 dải vàng, 3 clips), 25-42 (Style 5 Canvas 1:1 dải xanh, 3 clips), 43-48 (Style 4 Canvas 3:4 white badge, 3 clips).
+  2. Nâng `Style5.get_max_clips()` thành 3 clips.
+  3. Chạy `python -m pytest tests/test_style_mapping.py` để xác thực phân giải chính xác từng style instance và clip count.
+  4. Đồng bộ cờ `--style-map` / `-s` trong `cli.py` khi muốn ghi đè cấu hình dòng lệnh.
+- **Files liên quan**: `batch_video_cutter/config.py`, `batch_video_cutter/styles/style_5.py`, `tests/test_style_mapping.py`, `batch_video_cutter/ui/cli.py`
 
 ### Quy trình Đóng gói Clip Thành phẩm & Tên Video Output
 - **Ngày**: 2026-07-27

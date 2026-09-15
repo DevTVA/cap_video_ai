@@ -1,29 +1,30 @@
-"""Style 1: Scale 150% CapCut-style, tỷ lệ 1:1, nền mờ blur.
+"""Style 6: 9:16 Full Vertical Viral Shorts (TikTok / Reels / YouTube Shorts).
 
-Video gốc được scale 150% (phóng to 1.5 lần so với vừa khung) và đặt giữa canvas 1:1.
-Phần nền xung quanh là video gốc bị blur mạnh.
+Video tỷ lệ dọc 9:16 (1080x1920) chuẩn hiển thị toàn màn hình điện thoại.
+Nền video gốc được làm mờ (boxblur) và video chính đặt ở trung tâm kèm zoom nhẹ,
+áp dụng 100% mẫu và vị trí phụ đề chuẩn hóa toàn hệ thống (Safe Zone TikTok margin_v=330px).
 """
 
 from typing import Optional
 from .base import BaseStyle, HIGHLIGHT_COLOR_BLUE
 
 
-class Style1(BaseStyle):
-    """Phong cách 1: 1:1 với nền blur và 150% CapCut zoom."""
+class Style6(BaseStyle):
+    """Phong cách 6: 9:16 Full Vertical Viral Shorts với nền mờ và video trung tâm."""
 
-    style_index: int = 1
+    style_index: int = 6
 
     @property
     def name(self) -> str:
-        return "Style 1 - 1:1 Blur Background (CapCut 150% Zoom)"
+        return "Style 6 - 9:16 Full Vertical Viral Shorts (TikTok / Reels)"
 
     @property
     def aspect_ratio(self) -> str:
-        return "1:1"
+        return "9:16"
 
     def get_output_resolution(self) -> tuple[int, int]:
-        """Output 1080x1080 (1:1)."""
-        return (1080, 1080)
+        """Output Full HD dọc 1080x1920 (9:16)."""
+        return (1080, 1920)
 
     def get_ffmpeg_filter(
         self,
@@ -33,22 +34,19 @@ class Style1(BaseStyle):
     ) -> str:
         out_w, out_h = self.get_output_resolution()
 
-        # Tính kích thước vừa khung width 1080
-        fit_w = out_w
-        fit_h = int(input_height * (out_w / input_width))
+        # Tính kích thước vừa khung width 1080 cho foreground
+        fg_w = out_w
+        fg_h = int(input_height * (out_w / input_width))
 
-        # Phóng to 150% đúng chuẩn CapCut
-        fg_w = int(fit_w * 1.5)
-        fg_h = int(fit_h * 1.5)
-
+        # Đặt foreground căn giữa theo chiều dọc
         overlay_x = (out_w - fg_w) // 2
         overlay_y = (out_h - fg_h) // 2
 
         filters = [
             f"[0:v]split=2[bg][fg]",
-            f"[bg]scale=270:270:force_original_aspect_ratio=increase,"
-            f"crop=270:270,"
-            f"boxblur=10:1,"
+            f"[bg]scale=270:480:force_original_aspect_ratio=increase,"
+            f"crop=270:480,"
+            f"boxblur=15:2,"
             f"scale={out_w}:{out_h}[bg_blur]",
             f"[fg]scale={fg_w}:{fg_h}[fg_scaled]",
             f"[bg_blur][fg_scaled]overlay={overlay_x}:{overlay_y}[styled]",
@@ -61,20 +59,19 @@ class Style1(BaseStyle):
         else:
             output_label = "[styled]"
 
-
         return ";".join(filters), output_label
 
     def get_subtitle_position(self) -> str:
         return "bottom"
 
     def get_intro_offset(self) -> float:
-        """Phong cách 1: Cắt 3 giây đầu."""
+        """Bỏ qua 3.0 giây intro video gốc."""
         return 3.0
 
     def get_outro_offset(self) -> float:
-        """Phong cách 1: Cắt 30 giây cuối để tránh cắt vào outcard video gốc."""
-        return 30.0
+        """Bỏ qua 25.0 giây cuối video gốc."""
+        return 25.0
 
     def get_max_clips(self) -> Optional[int]:
-        """Phong cách 1 cắt 2 đoạn viral."""
-        return 2
+        """Cắt tối đa 3 clips viral."""
+        return 3

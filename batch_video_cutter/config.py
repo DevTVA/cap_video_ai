@@ -11,13 +11,14 @@ load_dotenv()
 
 TITLE_MIN_WORDS = 8
 TITLE_MAX_WORDS = 10
+SUBTITLE_TIME_OFFSET = 0.0  # 0.0s: Chuẩn thời gian thực 1:1 đồng bộ tuyệt đối qua FFmpeg PTS Sync
 
 env_input = os.getenv("INPUT_DIR")
 env_output = os.getenv("OUTPUT_DIR")
 
 DEFAULT_INPUT_DIR = Path(env_input) if env_input else Path(r"E:\output")
 DEFAULT_OUTPUT_DIR = Path(env_output) if env_output else Path(r"E:\output\final_clips")
-DEFAULT_STYLE_MAPPING = "1-36:3,37-42:4,43-48:5"
+DEFAULT_STYLE_MAPPING = "1-24:3,25-42:5,43-48:4"
 
 
 @dataclass
@@ -36,9 +37,12 @@ class AppConfig:
     use_gpu: bool = True
     ffmpeg_preset: str = "superfast"
     max_render_workers: int = 2
-    force_rerender: bool = False
+    force_rerender: bool = True
+    use_cache: bool = False
     outcard_path: Optional[Path] = field(default_factory=lambda: Path(os.getenv("OUTCARD_PATH")) if os.getenv("OUTCARD_PATH") else None)
     subtitle_align: str = "auto"
+    subtitle_time_offset: float = 0.0
+    subtitle_file: Optional[Path] = None
 
     def __post_init__(self):
         if not self.input_dir:

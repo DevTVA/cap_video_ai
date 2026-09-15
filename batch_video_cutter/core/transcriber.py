@@ -307,8 +307,35 @@ def _parse_subtitles_txt_file(txt_path: Path) -> List[SentenceSegment]:
     return segments
 
 
-def try_parse_existing_subtitles(video_path: Path) -> Optional[TranscriptResult]:
-    """Kiểm tra và nạp phụ đề từ file *.srt hoặc subtitles.txt có sẵn trong folder video."""
+def try_parse_existing_subtitles(
+    video_path: Path,
+    external_subtitle_file: Optional[Path] = None,
+) -> Optional[TranscriptResult]:
+    """Kiểm tra và nạp phụ đề từ file phụ đề ngoài, hoặc file *.srt/subtitles.txt có sẵn trong folder video."""
+    # 0. Ưu tiên nạp file phụ đề chỉ định bên ngoài (External Subtitle File)
+    if external_subtitle_file:
+        ext_path = Path(external_subtitle_file)
+        if ext_path.exists():
+            try:
+                if ext_path.suffix.lower() == ".srt":
+                    segments = _parse_srt_file(ext_path)
+                else:
+                    segments = _parse_subtitles_txt_file(ext_path)
+                if segments:
+                    logger.info(f"⚡ [External Subtitle] Nạp file phụ đề tùy chỉnh: {ext_path.name} ({len(segments)} segments)")
+                    duration = segments[-1].end if segments else 0.0
+                    full_text = " ".join(s.text for s in segments)
+                    return TranscriptResult(
+                        segments=segments,
+                        language="en",
+                        duration=duration,
+                        full_text=full_text,
+                        has_word_timestamps=False,
+                        timestamp_source="srt",
+                    )
+            except Exception as e:
+                logger.warning(f"Không thể đọc file phụ đề ngoài {ext_path}: {e}")
+
     folder = Path(video_path).parent
 
     # 1. Thử nạp từ file SRT (*.srt)
@@ -318,17 +345,27 @@ def try_parse_existing_subtitles(video_path: Path) -> Optional[TranscriptResult]
         try:
             segments = _parse_srt_file(srt_file)
             if segments:
-                logger.info(f"⚡ Phát hiện file phụ đề SRT có sẵn: {srt_file.name}. Nạp trực tiếp trong 0.01s!")
-                duration = segments[-1].end if segments else 0.0
-                full_text = " ".join(s.text for s in segments)
-                return TranscriptResult(
-                    segments=segments,
-                    language="en",
-                    duration=duration,
-                    full_text=full_text,
-                    has_word_timestamps=False,
-                    timestamp_source="srt",
-                )
+                # Kiểm tra YouTube rolling auto-captions (các dòng liên tiếp bị chồng chéo thời gian)
+                overlap_count = sum(1 for i in range(len(segments) - 1) if segments[i + 1].start < segments[i].end)
+                overlap_ratio = overlap_count / max(1, len(segments) - 1)
+                if overlap_ratio > 0.25:
+                    logger.warning(
+                        f"⚠️ File SRT có sẵn {srt_file.name} có tỉ lệ overlap {overlap_ratio:.1%} (>25%), "
+                        f"đây là YouTube rolling captions gây lặp từ và chớp tắt phụ đề. "
+                        f"Tự động bỏ qua để Whisper bóc băng trực tiếp chuẩn xác 100%!"
+                    )
+                else:
+                    logger.info(f"⚡ Phát hiện file phụ đề SRT có sẵn: {srt_file.name}. Nạp trực tiếp trong 0.01s!")
+                    duration = segments[-1].end if segments else 0.0
+                    full_text = " ".join(s.text for s in segments)
+                    return TranscriptResult(
+                        segments=segments,
+                        language="en",
+                        duration=duration,
+                        full_text=full_text,
+                        has_word_timestamps=False,
+                        timestamp_source="srt",
+                    )
         except Exception as e:
             logger.warning(f"Không thể đọc file SRT {srt_file.name}: {e}")
 
@@ -338,17 +375,27 @@ def try_parse_existing_subtitles(video_path: Path) -> Optional[TranscriptResult]
         try:
             segments = _parse_subtitles_txt_file(txt_file)
             if segments:
-                logger.info(f"⚡ Phát hiện file chép lời subtitles.txt có sẵn. Nạp trực tiếp trong 0.01s!")
-                duration = segments[-1].end if segments else 0.0
-                full_text = " ".join(s.text for s in segments)
-                return TranscriptResult(
-                    segments=segments,
-                    language="en",
-                    duration=duration,
-                    full_text=full_text,
-                    has_word_timestamps=False,
-                    timestamp_source="srt",
-                )
+                # Kiểm tra xem có phải YouTube auto-transcript thô không có dấu câu không
+                punct_count = sum(1 for s in segments if s.text.rstrip().endswith((".", "!", "?")))
+                punct_ratio = punct_count / max(1, len(segments))
+                if punct_ratio < 0.20:
+                    logger.warning(
+                        f"⚠️ File subtitles.txt có tỉ lệ dấu câu chỉ {punct_ratio:.1%} (<20%), "
+                        f"đây là YouTube auto-captions thô cắt vụn câu chữ gây chớp tắt phụ đề. "
+                        f"Tự động bỏ qua để Whisper bóc băng trực tiếp từ audio với câu cú hoàn chỉnh!"
+                    )
+                else:
+                    logger.info(f"⚡ Phát hiện file chép lời subtitles.txt có sẵn. Nạp trực tiếp trong 0.01s!")
+                    duration = segments[-1].end if segments else 0.0
+                    full_text = " ".join(s.text for s in segments)
+                    return TranscriptResult(
+                        segments=segments,
+                        language="en",
+                        duration=duration,
+                        full_text=full_text,
+                        has_word_timestamps=False,
+                        timestamp_source="srt",
+                    )
         except Exception as e:
             logger.warning(f"Không thể đọc file subtitles.txt: {e}")
 
@@ -361,16 +408,20 @@ def align_existing_subtitles_with_whisper(
     model_name: str = "base.en",
     device: str = "auto",
     compute_type: str = "auto",
+    language: Optional[str] = "en",
 ) -> TranscriptResult:
     """Thực hiện alignment audio với Whisper cho SRT sẵn có để lấy word-level timestamps chuẩn từ audio."""
     try:
         model = get_whisper_model(model_name=model_name, device=device, compute_type=compute_type)
         prompt_text = existing_result.full_text[:500] if existing_result.full_text else ""
+        whisper_lang = "en" if model_name.endswith(".en") else (None if language in ("auto", None) else language)
         segments_generator, info = model.transcribe(
             str(video_path),
-            language="en",
+            language=whisper_lang,
             word_timestamps=True,
             vad_filter=True,
+            vad_parameters=dict(min_silence_duration_ms=500),
+            condition_on_previous_text=False,
             initial_prompt=prompt_text if prompt_text else None,
         )
 
@@ -464,7 +515,9 @@ def transcribe_video(
     device: str = "auto",
     compute_type: str = "auto",
     subtitle_align: str = "auto",
-    use_cache: bool = True,
+    use_cache: bool = False,
+    language: Optional[str] = "en",
+    external_subtitle_file: Optional[Path] = None,
 ) -> TranscriptResult:
     """Chuyển đổi audio từ video thành text với word-level timestamps.
 
@@ -483,6 +536,8 @@ def transcribe_video(
         compute_type: Kiểu tính toán ("int8", "float16", "float32").
         subtitle_align: Chế độ căn chỉnh phụ đề ("auto", "fast", "deep").
         use_cache: Kích hoạt multi-factor disk cache (.cache/transcripts/).
+        language: Mã ngôn ngữ ('en', 'vi', hoặc 'auto' / None để tự phát hiện).
+        external_subtitle_file: File phụ đề (.srt / .txt) tùy chỉnh chỉ định từ ngoài.
 
     Returns:
         TranscriptResult chứa segments, words, language.
@@ -502,9 +557,9 @@ def transcribe_video(
         save_cached_transcript,
     )
 
-    # 1. Kiểm tra Multi-Factor Transcript Cache trên đĩa
-    cache_key = compute_transcript_cache_key(video_path, whisper_model=model_name, language="en")
-    if use_cache:
+    # 1. Kiểm tra Multi-Factor Transcript Cache trên đĩa (nếu không truyền external_subtitle_file tùy chỉnh)
+    cache_key = compute_transcript_cache_key(video_path, whisper_model=model_name, language=language or "auto")
+    if use_cache and not external_subtitle_file:
         cached = get_cached_transcript(cache_key)
         if cached is not None:
             # Nếu người dùng chạy ở chế độ auto hoặc deep, mà cache lại là 'estimated' -> Bỏ qua cache ước lượng để chạy Whisper align thật
@@ -514,8 +569,8 @@ def transcribe_video(
                 logger.info(f"⚡ [Cache Hit] Nạp transcript từ cache ({cached.timestamp_source}): {cache_key[:12]}... (bỏ qua bóc băng)")
                 return cached
 
-    # 2. Ưu tiên kiểm tra và nạp file phụ đề có sẵn trong folder
-    existing_result = try_parse_existing_subtitles(video_path)
+    # 2. Ưu tiên kiểm tra và nạp file phụ đề có sẵn trong folder hoặc external_subtitle_file
+    existing_result = try_parse_existing_subtitles(video_path, external_subtitle_file=external_subtitle_file)
     if existing_result:
         if not existing_result.has_word_timestamps:
             if subtitle_align == "fast":
@@ -532,6 +587,7 @@ def transcribe_video(
                     model_name=model_name,
                     device=device,
                     compute_type=compute_type,
+                    language=language,
                 )
                 if use_cache:
                     save_cached_transcript(cache_key, res, video_path, whisper_model=model_name)
@@ -544,11 +600,14 @@ def transcribe_video(
     model = get_whisper_model(model_name=model_name, device=device, compute_type=compute_type)
 
     # Transcribe — faster-whisper xử lý stream, không load hết vào RAM
+    whisper_lang = "en" if model_name.endswith(".en") else (None if language in ("auto", None) else language)
     segments_generator, info = model.transcribe(
         str(video_path),
-        language="en",
+        language=whisper_lang,
         word_timestamps=True,
         vad_filter=True,  # Lọc khoảng im lặng
+        vad_parameters=dict(min_silence_duration_ms=500),
+        condition_on_previous_text=False,
     )
 
     logger.info(
@@ -636,10 +695,9 @@ def format_transcript_for_llm(
         if seg.start >= intro_offset and (outro_offset == 0.0 or seg.end <= max_end):
             minutes = int(seg.start) // 60
             seconds = int(seg.start) % 60
-            seg_text = seg.text
-            if is_intro_or_monologue_line(seg_text):
-                seg_text = f"{seg_text} [SHOW INTRO - DO NOT SELECT]"
-            lines.append(f"[{minutes:02d}:{seconds:02d}] {seg_text}")
+            seg_text = seg.text.strip()
+            if seg_text:
+                lines.append(f"[{minutes:02d}:{seconds:02d}] {seg_text}")
 
     # Nếu bộ lọc làm rỗng transcript (do video quá ngắn), fallback chấp nhận đoạn ngắn sau mốc intro_offset
     if not lines:

@@ -5,7 +5,7 @@ Phần nền xung quanh là video gốc bị blur mạnh.
 """
 
 from typing import Optional
-from .base import BaseStyle
+from .base import BaseStyle, HIGHLIGHT_COLOR_BLUE
 
 
 class Style2(BaseStyle):
@@ -64,14 +64,6 @@ class Style2(BaseStyle):
 
     def get_subtitle_position(self) -> str:
         return "bottom"
-
-    def get_highlight_color(self) -> str:
-        """Màu Highlight MÀU XANH LÁ ("green")."""
-        return "green"
-
-    def get_font_size(self) -> int:
-        """Kích thước font chữ cho Style 2 (66pt bằng tỉ lệ cỡ chữ Outcard)."""
-        return 66
 
     def get_intro_offset(self) -> float:
         """Phong cách 2: Cắt 3 giây đầu."""

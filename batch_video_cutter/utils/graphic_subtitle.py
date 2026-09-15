@@ -23,9 +23,29 @@ from loguru import logger
 from .subtitle import SubtitleLine, SubtitleLayoutEngine, extract_emoji_for_phrase, COLOR_MAP
 from .emoji_manager import get_emoji_png_path
 
-# Global in-memory cache for chunk base layers
-_CHUNK_BASE_CACHE: Dict[str, Tuple[Image.Image, List[Tuple[str, int, int, int]], int]] = {}
-RENDERER_VERSION = "base-layer-v2"
+@dataclass
+class WordLayout2X:
+    clean_w: str
+    x_2x: int
+    y_2x: int
+    stroke_w: int
+    idx: int
+
+
+@dataclass
+class ChunkLayoutData:
+    font_2x: ImageFont.FreeTypeFont
+    words_layout_2x: List[WordLayout2X]
+    canvas_size: Tuple[int, int]
+    canvas_2x: Tuple[int, int]
+    emoji_img_2x: Optional[Image.Image] = None
+    emoji_pos_2x: Tuple[int, int] = (0, 0)
+    eff_font_size: int = 66
+
+
+# Global in-memory cache for chunk layout data
+_CHUNK_LAYOUT_CACHE: Dict[str, ChunkLayoutData] = {}
+RENDERER_VERSION = "word-reveal-v1"
 
 
 def compute_multi_factor_cache_key(
@@ -39,7 +59,7 @@ def compute_multi_factor_cache_key(
     emoji: str,
     renderer_version: str = RENDERER_VERSION,
 ) -> str:
-    """Compute strict multi-factor cache key for chunk base layers."""
+    """Compute strict multi-factor cache key for chunk layouts."""
     raw_key = (
         f"{text_norm}|{font_name}|{font_size}|{primary_rgba}|"
         f"{canvas_size[0]}x{canvas_size[1]}|{margin_v}|{position}|"
@@ -154,28 +174,21 @@ def _select_emphasis_words_in_chunk(chunk: List[Tuple[str, float, float]]) -> se
     return {best_idx}
 
 
-def _render_chunk_base_layer(
+def _compute_chunk_layout(
     line1_words: List[tuple],
     line2_words: List[tuple],
     font_size: int = 66,
-    primary_rgba: Tuple[int, int, int, int] = (255, 255, 255, 255),
     canvas_size: Tuple[int, int] = (1080, 1080),
     margin_v: int = 180,
     position: str = "bottom",
     emoji_img: Optional[Image.Image] = None,
     font_name: str = "Impact",
-) -> Tuple[Image.Image, List[Tuple[str, int, int, int]], int]:
-    """Tạo ảnh base 1X (gồm Drop Shadow + Black Stroke + Text Trắng + Emoji 3D) và vị trí từ 1X ONCE per chunk."""
+) -> ChunkLayoutData:
+    """Tính toán Font Size, Canvas 2X và bảng tọa độ vị trí cố định của từng từ trong chunk (Layout Freezing)."""
     scale = 2
     canvas_2x = (canvas_size[0] * scale, canvas_size[1] * scale)
     font_size_2x = font_size * scale
     font_2x = _get_font(font_name, font_size_2x)
-
-    shadow_img = Image.new("RGBA", canvas_2x, (0, 0, 0, 0))
-    shadow_draw = ImageDraw.Draw(shadow_img)
-
-    text_img = Image.new("RGBA", canvas_2x, (0, 0, 0, 0))
-    text_draw = ImageDraw.Draw(text_img)
 
     l1_text = " ".join(w[0].upper().strip() for w in line1_words) if line1_words else ""
     l2_text = " ".join(w[0].upper().strip() for w in line2_words) if line2_words else ""
@@ -204,16 +217,24 @@ def _render_chunk_base_layer(
         y1 = 45 * scale
         y2 = y1 + font_size_2x + 10 * scale
     else:
-        y2 = canvas_2x[1] - eff_margin_v - font_size_2x - 20 * scale
-        y1 = y2 - font_size_2x - 10 * scale
+        # Cố định baseline đáy trục Y (Fixed Bottom Baseline Alignment):
+        # y_base là tọa độ dòng đáy (cố định 100% không đổi)
+        line_height = font_size_2x + 10 * scale
+        y_base = canvas_2x[1] - eff_margin_v - font_size_2x - 10 * scale
         if not l2_text:
-            y1 = y2
+            # 1 dòng: đặt ngay tại baseline chuẩn y_base
+            y1 = y_base
+            y2 = y_base
+        else:
+            # 2 dòng: dòng 2 nằm tại baseline chuẩn y_base, dòng 1 xếp chồng ngay phía trên
+            y1 = y_base - line_height
+            y2 = y_base
 
     last_line_end_x = canvas_2x[0] // 2
     last_line_y = y1
-    word_positions = []
+    words_layout_2x: List[WordLayout2X] = []
 
-    # --- Render Dòng 1 ---
+    # --- Tính Layout Dòng 1 ---
     if l1_text:
         x_cursor = (canvas_2x[0] - l1_width) // 2
         for idx, (word_text, _, _) in enumerate(line1_words):
@@ -223,38 +244,20 @@ def _render_chunk_base_layer(
 
             stroke_w = max(12, int(14 * (font_size / 66.0)))
             y_pos = y1
-            word_positions.append((clean_w, x_cursor // scale, y_pos // scale, idx))
-
-            shadow_draw.text(
-                (x_cursor + 8, y_pos + 8),
-                clean_w,
-                font=font_2x,
-                fill=(0, 0, 0, 200),
-                stroke_width=stroke_w,
-                stroke_fill=(0, 0, 0, 200),
-            )
-            text_draw.text(
-                (x_cursor, y_pos),
-                clean_w,
-                font=font_2x,
-                fill=(0, 0, 0, 255),
-                stroke_width=stroke_w,
-                stroke_fill=(0, 0, 0, 255),
-            )
-            text_draw.text(
-                (x_cursor, y_pos),
-                clean_w,
-                font=font_2x,
-                fill=primary_rgba,
-                stroke_width=0,
-            )
+            words_layout_2x.append(WordLayout2X(
+                clean_w=clean_w,
+                x_2x=x_cursor,
+                y_2x=y_pos,
+                stroke_w=stroke_w,
+                idx=idx,
+            ))
             w_box = font_2x.getbbox(clean_w + " ")
             x_cursor += (w_box[2] - w_box[0])
 
         last_line_end_x = x_cursor
         last_line_y = y1
 
-    # --- Render Dòng 2 ---
+    # --- Tính Layout Dòng 2 ---
     if l2_text:
         x_cursor = (canvas_2x[0] - l2_width) // 2
         for idx, (word_text, _, _) in enumerate(line2_words, start=len(line1_words)):
@@ -264,48 +267,149 @@ def _render_chunk_base_layer(
 
             stroke_w = max(12, int(14 * (font_size / 66.0)))
             y_pos = y2
-            word_positions.append((clean_w, x_cursor // scale, y_pos // scale, idx))
-
-            shadow_draw.text(
-                (x_cursor + 8, y_pos + 8),
-                clean_w,
-                font=font_2x,
-                fill=(0, 0, 0, 200),
-                stroke_width=stroke_w,
-                stroke_fill=(0, 0, 0, 200),
-            )
-            text_draw.text(
-                (x_cursor, y_pos),
-                clean_w,
-                font=font_2x,
-                fill=(0, 0, 0, 255),
-                stroke_width=stroke_w,
-                stroke_fill=(0, 0, 0, 255),
-            )
-            text_draw.text(
-                (x_cursor, y_pos),
-                clean_w,
-                font=font_2x,
-                fill=primary_rgba,
-                stroke_width=0,
-            )
+            words_layout_2x.append(WordLayout2X(
+                clean_w=clean_w,
+                x_2x=x_cursor,
+                y_2x=y_pos,
+                stroke_w=stroke_w,
+                idx=idx,
+            ))
             w_box = font_2x.getbbox(clean_w + " ")
             x_cursor += (w_box[2] - w_box[0])
 
         last_line_end_x = x_cursor
         last_line_y = y2
 
+    emoji_img_2x = None
+    emoji_pos_2x = (0, 0)
     if emoji_img:
-        emoji_2x = emoji_img.resize((135, 135), Image.Resampling.LANCZOS)
+        emoji_img_2x = emoji_img.resize((135, 135), Image.Resampling.LANCZOS)
         emoji_x = min(canvas_2x[0] - 145, last_line_end_x + 12)
         emoji_y = int(last_line_y + 12)
-        text_img.paste(emoji_2x, (emoji_x, emoji_y), emoji_2x)
+        emoji_pos_2x = (emoji_x, emoji_y)
 
-    shadow_img = shadow_img.filter(ImageFilter.GaussianBlur(6))
-    composite_2x = Image.alpha_composite(shadow_img, text_img)
-    composite_1x = composite_2x.resize(canvas_size, Image.Resampling.LANCZOS)
+    return ChunkLayoutData(
+        font_2x=font_2x,
+        words_layout_2x=words_layout_2x,
+        canvas_size=canvas_size,
+        canvas_2x=canvas_2x,
+        emoji_img_2x=emoji_img_2x,
+        emoji_pos_2x=emoji_pos_2x,
+        eff_font_size=eff_font_size,
+    )
 
-    return composite_1x, word_positions, eff_font_size
+
+# Global in-memory cache for chunk layout data
+_CHUNK_LAYOUT_CACHE: Dict[str, ChunkLayoutData] = {}
+RENDERER_VERSION = "pill-box-v1"
+
+
+def compute_multi_factor_cache_key(
+    text_norm: str,
+    font_name: str,
+    font_size: int,
+    primary_rgba: Tuple[int, int, int, int],
+    canvas_size: Tuple[int, int],
+    margin_v: int,
+    position: str,
+    emoji: str,
+    renderer_version: str = RENDERER_VERSION,
+) -> str:
+    """Compute strict multi-factor cache key for chunk layouts."""
+    raw_key = (
+        f"{text_norm}|{font_name}|{font_size}|{primary_rgba}|"
+        f"{canvas_size[0]}x{canvas_size[1]}|{margin_v}|{position}|"
+        f"emoji={emoji}|v={renderer_version}"
+    )
+    return hashlib.sha256(raw_key.encode("utf-8")).hexdigest()
+
+
+def _render_word_reveal_frame(
+    layout: ChunkLayoutData,
+    active_idx: Optional[int],
+    primary_rgba: Tuple[int, int, int, int] = (255, 255, 255, 255),
+    highlight_rgba: Tuple[int, int, int, int] = (255, 230, 0, 255),
+    enable_pill_box: bool = False,
+    pill_box_color: Tuple[int, int, int, int] = (15, 15, 22, 195),
+) -> Image.Image:
+    """Render 1 khung hình theo cơ chế Word-by-Word Reveal:
+    - enable_pill_box: Mặc định False (bỏ nền đen đằng sau chữ theo yêu cầu, chữ nổi bật với viền đen stroke đậm đà).
+    - Các từ đã nói: Vẽ màu Trắng primary_rgba kèm viền đen đậm nét.
+    - Từ đang nói: Vẽ màu Vàng neon highlight_rgba nổi bật.
+    - Các từ chưa nói: Ẩn hoàn toàn (Word Reveal).
+    """
+    canvas_2x = layout.canvas_2x
+    font_2x = layout.font_2x
+    words = layout.words_layout_2x
+    total_words = len(words)
+    max_visible_idx = active_idx if active_idx is not None else (total_words - 1)
+
+    visible_words = [w for w in words if w.idx <= max_visible_idx]
+    font_size_2x = layout.eff_font_size * 2
+
+    pill_img = Image.new("RGBA", canvas_2x, (0, 0, 0, 0))
+
+    # Chỉ vẽ hộp nền Pill Box khi enable_pill_box=True
+    if enable_pill_box and words:
+        pill_draw = ImageDraw.Draw(pill_img)
+        lines_map = {}
+        for w in words:
+            lines_map.setdefault(w.y_2x, []).append(w)
+
+        pad_x = 36   # ~18px ở resolution 1x
+        pad_y = 16   # ~8px ở resolution 1x
+        pill_radius = 24
+
+        # Vẽ bóng đổ mờ nổi khối cho Pill Box (Floating Depth Shadow)
+        shadow_pill = Image.new("RGBA", canvas_2x, (0, 0, 0, 0))
+        shadow_pill_draw = ImageDraw.Draw(shadow_pill)
+
+        for line_y, l_words in lines_map.items():
+            min_x = min(w.x_2x for w in l_words)
+            max_x = max(w.x_2x + (font_2x.getbbox(w.clean_w)[2] - font_2x.getbbox(w.clean_w)[0]) for w in l_words)
+
+            bbox = [min_x - pad_x, line_y - pad_y, max_x + pad_x, line_y + font_size_2x + pad_y]
+            shadow_bbox = [min_x - pad_x + 4, line_y - pad_y + 8, max_x + pad_x + 4, line_y + font_size_2x + pad_y + 8]
+
+            shadow_pill_draw.rounded_rectangle(shadow_bbox, radius=pill_radius, fill=(0, 0, 0, 150))
+            pill_draw.rounded_rectangle(bbox, radius=pill_radius, fill=pill_box_color)
+
+        shadow_pill = shadow_pill.filter(ImageFilter.GaussianBlur(8))
+        pill_img = Image.alpha_composite(shadow_pill, pill_img)
+
+    text_img = Image.new("RGBA", canvas_2x, (0, 0, 0, 0))
+    text_draw = ImageDraw.Draw(text_img)
+
+    # Hiển thị Full Phrase Karaoke: Cả cụm từ hiển thị cố định, từ đang nói sáng Vàng neon
+    # Triệt tiêu 100% hiện tượng chớp nháy giật mắt khi từng từ nhảy ra
+    for w_layout in words:
+        x_pos, y_pos = w_layout.x_2x, w_layout.y_2x
+        stroke_w = max(10, int(12 * (layout.eff_font_size / 66.0)))
+        clean_w = w_layout.clean_w
+
+        # Solid black stroke layer
+        text_draw.text(
+            (x_pos, y_pos),
+            clean_w,
+            font=font_2x,
+            fill=(0, 0, 0, 255),
+            stroke_width=stroke_w,
+            stroke_fill=(0, 0, 0, 255),
+        )
+
+        # Text fill: Active word dùng highlight_rgba (Vàng neon #FFE600), các từ khác dùng primary_rgba (Trắng tinh)
+        fill_color = highlight_rgba if w_layout.idx == active_idx else primary_rgba
+        text_draw.text(
+            (x_pos, y_pos),
+            clean_w,
+            font=font_2x,
+            fill=fill_color,
+            stroke_width=0,
+        )
+
+    composite_2x = Image.alpha_composite(pill_img, text_img) if enable_pill_box else text_img
+    composite_1x = composite_2x.resize(layout.canvas_size, Image.Resampling.LANCZOS)
+    return composite_1x
 
 
 COLOR_RGBA_MAP: Dict[str, Tuple[int, int, int, int]] = {
@@ -313,7 +417,7 @@ COLOR_RGBA_MAP: Dict[str, Tuple[int, int, int, int]] = {
     "red": (255, 0, 0, 255),
     "green": (0, 255, 0, 255),
     "white": (255, 255, 255, 255),
-    "blue": (0, 128, 255, 255),
+    "blue": (0, 212, 255, 255),  # Electric Cyan Blue #00D4FF
 }
 
 
@@ -323,14 +427,15 @@ def generate_graphic_subtitles(
     font_name: str = "Impact",
     font_size: int = 66,
     primary_color: str = "&H00FFFFFF",
-    highlight_color_name: str = "yellow",
+    highlight_color_name: str = "blue",
     margin_v: int = 180,
     emoji_on_top: bool = True,
     canvas_size: Tuple[int, int] = (1080, 1080),
     position: str = "bottom",
     outcard_start_s: Optional[float] = None,
+    enable_pill_box: bool = False,
 ) -> List[Tuple[Path, float, float]]:
-    """Tạo danh sách các file ảnh PNG phụ đề đồ họa từ các SubtitleChunk chuẩn hóa duy nhất."""
+    """Tạo danh sách các file ảnh PNG phụ đề đồ họa từ các SubtitleChunk theo cơ chế Word-by-Word Reveal."""
     from .subtitle import SubtitleChunker
 
     tmp_dir = Path(tmp_dir)
@@ -338,8 +443,8 @@ def generate_graphic_subtitles(
 
     font = _get_font(font_name, font_size)
     primary_rgba = (255, 255, 255, 255)
-    highlight_key = (highlight_color_name or "yellow").lower()
-    highlight_rgba = COLOR_RGBA_MAP.get(highlight_key, (255, 255, 0, 255))
+    highlight_key = (highlight_color_name or "blue").lower()
+    highlight_rgba = COLOR_RGBA_MAP.get(highlight_key, (0, 212, 255, 255))
 
     graphic_results: List[Tuple[Path, float, float]] = []
     frame_count = 0
@@ -357,7 +462,7 @@ def generate_graphic_subtitles(
     highlighted_count = 0
     emoji_count = 0
 
-    # Step 1: Multi-factor Cache Key Lookup & Bounded Parallel Pre-rendering for Cache Misses
+    # Step 1: Multi-factor Cache Key Lookup & Bounded Parallel Layout Pre-calculation
     chunk_cache_keys = []
     miss_items = []
 
@@ -383,13 +488,13 @@ def generate_graphic_subtitles(
             emoji=chunk.emoji or "",
         )
         chunk_cache_keys.append(c_key)
-        if c_key not in _CHUNK_BASE_CACHE:
+        if c_key not in _CHUNK_LAYOUT_CACHE:
             miss_items.append((c_key, chunk))
 
     if miss_items:
         max_workers = min(os.cpu_count() or 4, 4)
 
-        def _render_task(item):
+        def _layout_task(item):
             k, c = item
             emoji_img = None
             if c.emoji:
@@ -400,56 +505,56 @@ def generate_graphic_subtitles(
                         emoji_img = emoji_img.resize((65, 65), Image.Resampling.LANCZOS)
                     except Exception as err:
                         logger.warning(f"Không thể nạp ảnh emoji {emoji_png_path}: {err}")
-            b_1x, w_pos_1x, eff_sz = _render_chunk_base_layer(
+            layout_data = _compute_chunk_layout(
                 line1_words=c.line1_words,
                 line2_words=c.line2_words,
                 font_size=font_size,
-                primary_rgba=primary_rgba,
                 canvas_size=canvas_size,
                 margin_v=margin_v,
                 position=position,
                 emoji_img=emoji_img,
                 font_name=font_name,
             )
-            return k, b_1x, w_pos_1x, eff_sz, bool(emoji_img)
+            return k, layout_data, bool(emoji_img)
 
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            results = executor.map(_render_task, miss_items)
-            for k, b_1x, w_pos_1x, eff_sz, had_emoji in results:
-                _CHUNK_BASE_CACHE[k] = (b_1x, w_pos_1x, eff_sz)
+            results = executor.map(_layout_task, miss_items)
+            for k, layout_data, had_emoji in results:
+                _CHUNK_LAYOUT_CACHE[k] = layout_data
                 if had_emoji:
                     emoji_count += 1
 
-    # Step 2: Render active word interval frames from cached base layers
+    # Step 2: Render Word-by-Word Reveal interval frames
     for i_chunk, chunk in enumerate(chunks):
         chunk_start = chunk.start
         chunk_end = chunk.end
         all_words = chunk.all_words
         c_key = chunk_cache_keys[i_chunk]
 
-        cached_base_1x, word_positions_1x, eff_font_size = _CHUNK_BASE_CACHE[c_key]
-        base_1x = cached_base_1x.copy()
-        font_1x = _get_font(font_name, eff_font_size)
+        layout_data = _CHUNK_LAYOUT_CACHE[c_key]
 
-        # Xây dựng mốc thời gian Highlight chuẩn word-by-word
+        # Xây dựng mốc thời gian Reveal chuẩn word-by-word (Gapless Intra-chunk Reveal)
         time_intervals = []
         n_words = len(all_words)
         for i_w, w_info in enumerate(all_words):
-            w_start, w_end = w_info[1], w_info[2]
-            w_start = round(max(chunk_start, w_start), 4)
-            w_end = round(min(chunk_end, w_end), 4)
+            w_start = round(max(chunk_start, w_info[1]), 4)
+            # Đối với các từ chưa phải từ cuối: gối đầu trực tiếp sang thời điểm bắt đầu của từ kế tiếp (next_start)
+            # Đảm bảo phụ đề hiển thị LIÊN TỤC 100%, không bị chớp tắt / mất hình giữa các từ trong cùng một cụm câu
             if i_w < n_words - 1:
                 next_start = all_words[i_w + 1][1]
-                if 0.0 < (next_start - w_end) <= 0.15:
-                    w_end = round(next_start, 4)
-            if w_end > w_start + 0.01:
-                time_intervals.append(((i_w,), w_start, w_end))
+                w_end = round(max(w_start + 0.01, next_start), 4)
+            else:
+                # Từ cuối cùng của chunk giữ hiển thị đến hết chunk_end
+                w_end = round(max(w_start + 0.01, chunk_end), 4)
+
+            if w_end > w_start + 0.005:
+                time_intervals.append((i_w, w_start, w_end))
 
         if not time_intervals:
-            time_intervals = [(None, chunk_start, chunk_end)]
+            time_intervals = [(0, chunk_start, chunk_end)]
 
         rendered_frames = {}
-        for active_emph_idx, interval_s, interval_e in time_intervals:
+        for active_w_idx, interval_s, interval_e in time_intervals:
             if outcard_start_s is not None:
                 if interval_s >= outcard_start_s:
                     continue
@@ -458,31 +563,21 @@ def generate_graphic_subtitles(
             if interval_e <= interval_s:
                 continue
 
-            if active_emph_idx not in rendered_frames:
-                if not active_emph_idx:
-                    rendered_frames[active_emph_idx] = base_1x
-                else:
-                    frame_img = base_1x.copy()
-                    frame_draw = ImageDraw.Draw(frame_img)
-                    for clean_w, x_1x, y_1x, idx in word_positions_1x:
-                        if idx in active_emph_idx:
-                            frame_draw.text(
-                                (x_1x, y_1x),
-                                clean_w,
-                                font=font_1x,
-                                fill=highlight_rgba,
-                                stroke_width=0,
-                            )
-                    rendered_frames[active_emph_idx] = frame_img
+            if active_w_idx not in rendered_frames:
+                rendered_frames[active_w_idx] = _render_word_reveal_frame(
+                    layout=layout_data,
+                    active_idx=active_w_idx,
+                    primary_rgba=primary_rgba,
+                    highlight_rgba=highlight_rgba,
+                    enable_pill_box=enable_pill_box,
+                )
 
-            composite = rendered_frames[active_emph_idx]
+            composite = rendered_frames[active_w_idx]
             frame_count += 1
             out_png_path = tmp_dir / f"g_sub_{frame_count:04d}.png"
             composite.save(out_png_path, "PNG", compress_level=1)
             graphic_results.append((out_png_path, interval_s, interval_e))
 
-        # Explicit reference release to keep RAM bounded
-        del base_1x
         del rendered_frames
 
     # Global Visual State Sanitization & Timeline Continuity (chạy 1 lần duy nhất trên toàn bộ clip)
@@ -507,16 +602,22 @@ def generate_graphic_subtitles(
         if e > s + 0.01:
             sanitized.append((path, round(s, 3), round(e, 3)))
 
-    # Cho phép khoảng nghỉ thở tự nhiên (Breathing Pause >= 0.22s) ở cuối các câu thoại để phụ đề nghỉ nhịp không bị đập liên tục
+    # Gối đầu liền kề giữa các câu thoại (Seamless Continuity):
+    # Triệt tiêu 100% hiện tượng chớp tắt (flicker) giữa các câu thoại ngắt nghỉ.
     final_list = []
     n = len(sanitized)
     for i in range(n):
         path, s, e = sanitized[i]
         if i < n - 1:
             next_s = sanitized[i + 1][1]
-            # Trám khoảng lặng cực ngắn (< 0.22s) chống micro-blink, giữ nguyên khoảng nghỉ thở tự nhiên >= 0.22s
-            if next_s > s and (next_s - e) < 0.22:
-                e = round(next_s, 3)
+            if next_s > s:
+                gap = next_s - e
+                if gap < 1.8:
+                    # Gối đầu liền kề giữa các câu thoại: câu trước giữ hiển thị cho đến khi câu sau bắt đầu
+                    e = round(next_s, 3)
+                else:
+                    # Khoảng lặng dài (> 1.8s): giữ câu thêm tối đa 0.6s để người xem đọc trọn vẹn, không tắt đột ngột
+                    e = round(min(next_s - 0.2, e + 0.6), 3)
 
         if e > s + 0.01:
             final_list.append((path, round(s, 3), round(e, 3)))
@@ -962,6 +1063,9 @@ def format_top_caption_lines(
     )
 
 
+TOP_CAPTION_FONT_NAME: str = "MYRIADPRO-BLACK_0"
+
+
 def generate_top_caption_layer(
     title_text: str,
     output_png: Path,
@@ -969,6 +1073,7 @@ def generate_top_caption_layer(
     top_area_height: int = 280,
     fallback_text: str = "",
     style_index: int = 4,
+    font_name: str = TOP_CAPTION_FONT_NAME,
 ) -> Optional[Path]:
     """Tạo file PNG chứa Top Caption cho Canvas 3:4 và 1:1 theo từng Phong cách.
     
@@ -990,7 +1095,7 @@ def generate_top_caption_layer(
     max_text_w = canvas_size[0] - margin_x * 2 - pad_w * 2  # 936px
 
     def evaluate_fsize(fsize: int):
-        test_f = SubtitleLayoutEngine.get_font("Montserrat-Bold", fsize)
+        test_f = SubtitleLayoutEngine.get_font(font_name, fsize)
         test_layout = format_top_caption_lines(words, test_f, max_text_w)
         overflow = any((test_f.getbbox(l)[2] - test_f.getbbox(l)[0]) > max_text_w for l in test_layout.lines)
         return test_f, test_layout, overflow
@@ -1029,7 +1134,7 @@ def generate_top_caption_layer(
         if max_line_w > max_text_w and max_line_w > 0:
             scale_factor = max_text_w / float(max_line_w)
             scaled_fsize = max(8, int(16 * scale_factor * 0.95))
-            font = SubtitleLayoutEngine.get_font("Montserrat-Bold", scaled_fsize)
+            font = SubtitleLayoutEngine.get_font(font_name, scaled_fsize)
             layout_res = format_top_caption_lines(words, font, max_text_w)
             lines = layout_res.lines
             logger.info(f"Top caption auto-scaled to {scaled_fsize}pt for long text fitting.")
@@ -1042,7 +1147,7 @@ def generate_top_caption_layer(
     img = Image.new("RGBA", canvas_size, (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
 
-    # 1. Phong cách 3 (Canvas 1:1 1080x1080): Render Dải Nền Vàng + Chữ Đen Montserrat-Bold Cân Đối
+    # 1. Phong cách 3 (Canvas 1:1 1080x1080): Render Dải Nền Vàng + Chữ Đen Cân Đối
     if style_index == 3:
         draw.rectangle([0, 0, canvas_size[0], top_area_height], fill=(255, 255, 0, 255))
 
@@ -1066,9 +1171,9 @@ def generate_top_caption_layer(
             draw.text((x_pos, curr_y), line_str, font=font, fill=(0, 0, 0, 255))
             curr_y += line_h + line_gap
 
-        logger.info(f"Đã tạo PNG Top Caption Dải Nền Vàng Chữ Đen Montserrat-Bold ({len(lines)} Dòng - Style 3): {output_png}")
+        logger.info(f"Đã tạo PNG Top Caption Dải Nền Vàng Chữ Đen {font_name} ({len(lines)} Dòng - Style 3): {output_png}")
 
-    # 2. Phong cách 5: Render Dải Nền Xanh Dương (#5576FB) + Chữ TRẮNG Montserrat-Bold Cân Đối (Chuẩn thuật toán Style 3)
+    # 2. Phong cách 5: Render Dải Nền Xanh Dương (#5576FB) + Chữ TRẮNG Cân Đối (Chuẩn thuật toán Style 3)
     elif style_index == 5:
         # Draw top blue banner (solid fill #5576FB / RGB 85, 118, 251)
         draw.rectangle([0, 0, canvas_size[0], top_area_height], fill=(85, 118, 251, 255))
@@ -1093,7 +1198,7 @@ def generate_top_caption_layer(
             draw.text((x_pos, curr_y), line_str, font=font, fill=(255, 255, 255, 255))
             curr_y += line_h + line_gap
 
-        logger.info(f"Đã tạo PNG Top Caption Dải Nền Xanh Chữ Trắng Montserrat-Bold ({len(lines)} Dòng - Style 5): {output_png}")
+        logger.info(f"Đã tạo PNG Top Caption Dải Nền Xanh Chữ Trắng {font_name} ({len(lines)} Dòng - Style 5): {output_png}")
 
     # 3. Phong cách 4: Canvas 3:4 (1080x1440) White Rounded Badge cân đối uốn lượn
     else:
@@ -1135,7 +1240,7 @@ def generate_top_caption_layer(
             text_y = box_y1 + pad_h
             draw.text((text_x, text_y), line_str, font=font, fill=(0, 0, 0, 255))
 
-        logger.info(f"Đã tạo PNG Top Caption Stepped White Badge ({len(lines)} Dòng - Style 4): {output_png}")
+        logger.info(f"Đã tạo PNG Top Caption Stepped White Badge {font_name} ({len(lines)} Dòng - Style 4): {output_png}")
 
     output_png.parent.mkdir(parents=True, exist_ok=True)
     img.save(output_png, "PNG", compress_level=1)

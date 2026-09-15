@@ -1,7 +1,7 @@
 # Speech-Rhythm Subtitle Engine
 
 > Tổng hợp kiến thức về thuật toán ngắt nhịp phụ đề chuẩn theo giọng nói nhân vật, word-level alignment, SubtitleLayoutEngine và vị trí/font size phụ đề đồ họa.
-> Cập nhật lần cuối: 2026-08-22
+> Cập nhật lần cuối: 2026-09-13
 
 ---
 
@@ -37,6 +37,16 @@
 - **Chi tiết**: Khi nạp phụ đề SRT/txt có sẵn chỉ chứa sentence-level timestamp (`words=[]`), hệ thống tự động gọi Whisper audio stream alignment (`align_existing_subtitles_with_whisper`) để trích xuất `words` (word-level timestamp) thực tế từ audio gốc mà không làm mất cấu trúc câu SRT.
 - **Files liên quan**: `batch_video_cutter/core/transcriber.py`
 
+### Chuẩn Hóa Phụ Đề Toàn Hệ Thống (Standardized Subtitle Styles & Safe Zone)
+- **Ngày**: 2026-09-13
+- **Chi tiết**: Thống nhất font chữ `Impact` kích cỡ `66pt` và màu highlight `yellow` (`#FFE600`) cho tất cả Style. Chuẩn hóa khoảng cách lề dưới (`get_margin_v()`) tự động cân đối theo chiều cao Canvas để nằm trọn trong Safe Zone của TikTok/Reels/Shorts: Canvas 1:1 (`h <= 1080`): `110px`; Canvas 3:4 (`h == 1440`): `160px`; Canvas 9:16 (`h >= 1920`): `330px`, tránh bị che bởi thanh công cụ UI của mạng xã hội.
+- **Files liên quan**: `batch_video_cutter/styles/base.py`, `batch_video_cutter/styles/style_*.py`, `tests/test_standardized_subtitle_styles.py`
+
+### Kiến Trúc Style 6 - 9:16 Full Vertical Viral Shorts (TikTok / Reels)
+- **Ngày**: 2026-09-13
+- **Chi tiết**: Bổ sung `Style6` xuất video 1080x1920 (9:16) chuẩn dọc toàn màn hình điện thoại. Áp dụng hiệu ứng nền mờ (Background BoxBlur): tối ưu hiệu năng render bằng cách crop và scale thu nhỏ `scale=270:480` trước khi chạy `boxblur=15:2`, sau đó mới scale phóng to `1080:1920` ghép với foreground căn giữa. Bỏ qua 3.0s intro và 25.0s outro, cắt tối đa 3 clips viral.
+- **Files liên quan**: `batch_video_cutter/styles/style_6.py`, `batch_video_cutter/styles/factory.py`, `batch_video_cutter/styles/__init__.py`
+
 ---
 
 ## Bugs & Solutions
@@ -69,6 +79,13 @@
 - **Fix**: Thực hiện alignment word timestamp từ audio bằng Whisper cho SRT. Nếu không align được, gắn nhãn `timestamp_source = "fallback"` và dùng thuật toán **Char-Weighted + Punctuation Pause Alignment**.
 - **Files liên quan**: `batch_video_cutter/core/transcriber.py`, `batch_video_cutter/utils/subtitle.py`
 
+### Lọc YouTube Auto-Captions Thô Cắt Vụn Gây Chớp Tắt Phụ Đề
+- **Ngày**: 2026-09-13
+- **Vấn đề**: Khi nạp file `subtitles.txt` tải từ YouTube auto-captions, các câu bị cắt vụn 1-2 từ và không có dấu chấm phẩy, gây chớp tắt phụ đề liên tục và lệch nhịp đọc.
+- **Root cause**: Hệ thống nạp trực tiếp file `subtitles.txt` có sẵn mà không đánh giá chất lượng dấu câu (punctuation).
+- **Fix**: Trong `try_parse_existing_subtitles()`, kiểm tra tỷ lệ kết thúc câu bằng dấu chấm/than/hỏi (`.`, `!`, `?`). Nếu `punct_ratio < 0.20` (< 20%), tự động phát hiện là auto-transcript thô, ghi log cảnh báo và bỏ qua file để Whisper bóc băng trực tiếp từ audio với cấu trúc câu cú hoàn chỉnh.
+- **Files liên quan**: `batch_video_cutter/core/transcriber.py`, `tests/test_transcriber_upgrades.py`
+
 ---
 
 ## How-To
@@ -81,6 +98,14 @@
   3. Gọi `SubtitleLayoutEngine.layout_subtitle_line()` để gom chunk theo dấu câu/pause và tách 2 dòng cân bằng pixel width.
   4. Hiệu ứng Karaoke: Highlight từ tương ứng với mốc thời gian `w_start <= t < w_end` mà không làm thay đổi timing hoặc layout.
 - **Files liên quan**: `batch_video_cutter/utils/subtitle.py`, `batch_video_cutter/utils/graphic_subtitle.py`
+
+### Chỉ Định File Phụ Đề Tùy Chỉnh Từ Ngoài (--external-subtitle-file)
+- **Ngày**: 2026-09-13
+- **Bước thực hiện**:
+  1. Thêm cờ CLI `--external-subtitle-file` (hoặc `-sub`) trỏ đến file `.srt` hoặc `.txt`.
+  2. Transcriber bỏ qua transcript cache, nạp trực tiếp file phụ đề chỉ định.
+  3. Tự động chạy Whisper audio alignment để có word-level timestamps chính xác từ audio gốc, kết hợp gối đầu liền kề triệt tiêu giật lắc.
+- **Files liên quan**: `batch_video_cutter/ui/cli.py`, `batch_video_cutter/core/transcriber.py`, `tests/test_external_subtitle_file.py`
 
 ---
 
@@ -111,6 +136,23 @@
   1. **Cache đa yếu tố**: Lưu transcript tại `.cache/transcripts/<hash>.json` và alignment tại `.cache/alignments/<hash>.json` với key SHA-256 từ `(mtime, size, model, lang, version)`. Bỏ qua bóc băng ở các lần chạy sau.
   2. **Global Concurrency Sweet Spot**: Benchmark thực nghiệm chứng minh `TOTAL_RENDER_WORKERS = 2` trên GPU AMD AMF (`h264_amf`) cho thông lượng tối ưu nhất (7.39s/s), tránh nghẽn GPU bus và tràn VRAM khi tăng lên 4 workers.
   3. **PNG I/O Speedup**: Sử dụng `compress_level=1` khi ghi ảnh tạm PNG, giảm 65% thời gian I/O đĩa (từ 1.25s xuống 0.44s cho 80 frame).
-  4. **Smart Pipeline Skip**: Tự động bỏ qua render clip nếu file thành phẩm hợp lệ đã tồn tại trên đĩa (>100KB).
+  4. **Always Fresh Rendering (Disable Cache & Skip by Default)**: Người dùng thực tế chỉ cắt mỗi folder một lần; nếu cắt lại lần 2 tức là do lần đầu có lỗi hoặc muốn thay đổi. Vì vậy, hệ thống đã loại bỏ hoàn toàn cơ chế Smart Skip và mặc định `force_rerender=True`, `use_cache=False` (cờ CLI `--force` và `--no-cache` mặc định). Đảm bảo mỗi lần chạy là một phiên bản làm mới hoàn toàn, không nạp lại file rác hoặc video cũ.
 - **Files liên quan**: `batch_video_cutter/core/cache_manager.py`, `batch_video_cutter/core/telemetry.py`, `batch_video_cutter/pipeline.py`
 
+### Subtitle Timing & Container PTS Zeroing (0.0s Real-Time Baseline)
+- **Ngày**: 2026-09-11
+- **Chi tiết**: 
+  1. **Container PTS Hard-Sync**: Khi FFmpeg video stream (`setpts=PTS-STARTPTS,fps=30`), audio stream (`asetpts=PTS-STARTPTS`) và subtitle PNG stream (`setpts=PTS-STARTPTS,fps=30`) kết hợp `-avoid_negative_ts make_zero` được hard-sync tuyệt đối tại `0.000s`, mốc thời gian Whisper gốc đã **khớp 1:1 theo thời gian thực** với tiếng nói nhân vật.
+  2. **Tránh Over-compensation**: Sau khi đã hard-sync PTS, nếu đặt offset âm quá lớn (-0.22s) sẽ đẩy phụ đề chạy trước lời nói ~7 frames. Vì vậy, mốc mặc định chuẩn thời gian thực là `SUBTITLE_TIME_OFFSET = 0.0s`.
+  3. **CLI Flexibility**: Cung cấp cờ `--subtitle-offset [float]` (mặc định `0.0`) để người dùng có thể tinh chỉnh theo ý muốn (ví dụ `-0.05` nếu muốn hiện sớm 1-2 frame, hoặc `+0.05` nếu muốn chậm lại một chút).
+- **Files liên quan**: `batch_video_cutter/config.py`, `batch_video_cutter/utils/subtitle.py`, `batch_video_cutter/core/engine.py`, `batch_video_cutter/ui/cli.py`
+
+### Static Pill Box & Seamless Continuity (Zero-Flicker Subtitles)
+- **Ngày**: 2026-09-11
+- **Chi tiết**: 
+  1. **Triệt tiêu hiện tượng co giãn giật cục của Pill Box**: Hộp nền đen mờ được tính kích thước cố định theo **toàn bộ các từ trong cụm** (`words`), không bị giật dài ra theo từng từ. Các từ xuất hiện theo cơ chế Word-by-Word Reveal: từ đang nói sáng rực màu highlight (Vàng neon `#FFE600`), các từ đã nói màu trắng tinh viền đen. Hộp đen đứng yên 100%, êm dịu hoàn toàn (Zero Jitter).
+  2. **Gối đầu liền kề triệt tiêu chớp tắt (< 1.8s)**: Nâng ngưỡng gối đầu liền kề lên `1.8s` (Seamless Continuity). Bất kỳ khoảng nghỉ nói chuyện tự nhiên nào $< 1.8s$ giữa 2 câu liên tiếp sẽ giữ câu trước hiển thị cho đến đúng khi câu sau bắt đầu (`e = next_s`). Triệt tiêu 100% hiện tượng phụ đề tắt ngúm rồi bật lại gây chớp mắt. Với khoảng lặng dài ($> 1.8s$), giữ câu thêm 0.6s để người xem đọc trọn vẹn, không ngắt đột ngột.
+  3. **Bỏ hoàn toàn Icon/Emoji**: Toàn bộ hệ thống không chèn hay vẽ bất kỳ emoji/icon nào lên phụ đề (cả ASS và Graphic Subtitle).
+  4. **Bỏ Hộp Nền Đen Đằng Sau Chữ & Tối Ưu Viền Stroke Đậm**: Đặt `enable_pill_box = False` làm mặc định, loại bỏ hoàn toàn mảng hộp đen mờ che đằng sau chữ. Đồng thời tăng cường độ dày viền đen (`stroke_w = max(10, int(12 * (font_size / 66.0)))` ở canvas 2x, tương đương 5-6px ở 1x), giúp chữ trắng tinh và từ active màu vàng neon nổi bật rõ ràng, sắc nét trên mọi nền video mà không bị lóa và không che khuất khung hình video.
+  5. **Bug Mất Phụ Đề Khi Tắt Emoji & Cách Khắc Phục**: Trước đây `generate_ass_subtitle` có nhánh `if emoji_on_top: return generate_graphic_subtitles(...)`. Khi tắt emoji (`add_emojis = False` -> `emoji_on_top = False`), hệ thống rẽ nhánh sang sinh file `.ass` thô và trả về `timed_emojis = []`. Sau đó style có Top Caption Badge nhét ảnh caption vào `timed_emojis`, khiến `engine.py` nhận diện `if timed_emojis: sub_str = None`, vô tình tắt luôn file `.ass` làm mất 100% phụ đề! Giải pháp: `generate_ass_subtitle` **LUÔN LUÔN** gọi `generate_graphic_subtitles(..., emoji_on_top=emoji_on_top)` để dù có emoji hay không thì phụ đề luôn là Graphic Subtitle Pillow chất lượng cao. Đồng thời trong `engine.py`, chỉ tắt `sub_str` khi thực sự đã có `has_karaoke_png`.
+- **Files liên quan**: `batch_video_cutter/utils/graphic_subtitle.py`, `batch_video_cutter/utils/subtitle.py`, `batch_video_cutter/core/engine.py`, `batch_video_cutter/pipeline.py`

@@ -131,12 +131,6 @@ class PipelineOrchestrator:
         """Xử lý 1 video duy nhất với semaphore giới hạn concurrency."""
         async with semaphore:
             str_path = str(video_info.path)
-            first_clip_path = self.bundle_dir / f"{video_info.folder_name}.1.mp4"
-            if not getattr(self.config, "force_rerender", False) and str_path in self.completed_videos and first_clip_path.exists():
-                logger.info(f"Đã xử lý trước đó và file clip tồn tại, bỏ qua: {video_info.path.name}")
-                progress_bar.update(1)
-                return
-
             logger.info(f"--- Bắt đầu xử lý: Folder [{video_info.folder_name}] | {video_info.path.name} ---")
 
 
@@ -151,6 +145,8 @@ class PipelineOrchestrator:
                             video_info.path,
                             model_name=self.config.whisper_model,
                             subtitle_align=getattr(self.config, "subtitle_align", "auto"),
+                            use_cache=getattr(self.config, "use_cache", False),
+                            external_subtitle_file=getattr(self.config, "subtitle_file", None),
                         ),
                     )
 
@@ -214,20 +210,6 @@ class PipelineOrchestrator:
                         from batch_video_cutter.utils.graphic_subtitle import clean_caption_text
                         title_text_en = clean_caption_text(seg.title_en)
 
-                        # Smart Skip: Bỏ qua render nếu clip thành phẩm hợp lệ đã tồn tại trên đĩa (>100KB)
-                        if not getattr(self.config, "force_rerender", False) and output_clip_path.exists() and output_clip_path.stat().st_size > 100_000:
-                            logger.info(f"⚡ [Smart Skip] Clip thành phẩm đã tồn tại ({output_clip_path.stat().st_size / 1024:.1f} KB), bỏ qua render: {clip_filename}")
-                            return {
-                                "filename": clip_filename,
-                                "title_en": title_text_en,
-                                "title_vi": seg.title_vi or "",
-                                "title": title_text_en,
-                                "folder_name": video_info.folder_name,
-                                "start_time": seg.start_time,
-                                "end_time": seg.end_time,
-                                "reason": getattr(seg, "reason", ""),
-                            }
-
                         telemetry = ClipTelemetry(
                             folder_name=video_info.folder_name,
                             clip_idx=clip_idx,
@@ -257,12 +239,13 @@ class PipelineOrchestrator:
                                     position=sub_position,
                                     font_name=getattr(style, "get_font_name", lambda: "Montserrat Black")(),
                                     font_size=getattr(style, "get_font_size", lambda: 54)(),
-                                    highlight_color_name=getattr(style, "get_highlight_color", lambda: "yellow")(),
+                                    highlight_color_name=getattr(style, "get_highlight_color", lambda: "blue")(),
                                     italic=getattr(style, "get_italic_option", lambda: False)(),
-                                    add_emojis=True,
+                                    add_emojis=False,
                                     canvas_size=style.get_output_resolution(),
                                     outcard_start_s=outcard_start_s,
                                     margin_v=getattr(style, "get_margin_v", lambda: 110)(),
+                                    subtitle_time_offset=getattr(self.config, "subtitle_time_offset", 0.0),
                                 )
                             )
                             telemetry.t_align = time.perf_counter() - t_align_start

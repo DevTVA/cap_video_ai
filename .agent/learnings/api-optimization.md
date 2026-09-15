@@ -69,12 +69,67 @@
 - **Fix**: Viết hàm helper `_extract_http_error_detail(err)` đọc và trích xuất JSON message từ HTTP response stream (vd: `HTTP 401: Invalid API Key provided`).
 - **Files liên quan**: [analyzer.py](file:///e:/AI_Agent/batch_video_cutter/core/analyzer.py), [test_groq_api_error_handling.py](file:///e:/AI_Agent/tests/test_groq_api_error_handling.py)
 
-### Lỗi Parse Text Response LLM Không Trích Xuất Được Tiêu Đề 2 Ngôn Ngữ
-- **Ngày**: 2026-07-31
-- **Vấn đề**: Khi AI trả về response theo đúng prompt `scipt.txt` có chèn dòng trống `\n` giữa timecode và tiêu đề, parser đọc phải dòng trống dẫn tới `title_en` và `title_vi` bị rỗng (`""`), từ đó kích hoạt fallback title mặc định.
-- **Root cause**: `_parse_llm_response_text` chỉ đọc dòng `i+1` cố định thay vì duyệt bỏ qua các dòng trống.
-- **Fix**: Cập nhật `_parse_llm_response_text` dùng vòng lặp `while` tự động bỏ qua tất cả các dòng trống `\n` để trích xuất chuẩn `title_en` và `title_vi`.
+### Lỗi Treo Vô Tận Ứng Dụng (Socket Hang) Do Thiếu Timeout Trên Gemini generate_content
+- **Ngày**: 2026-09-10
+- **Vấn đề**: Khi bóc băng transcript xong một video dài, ứng dụng gửi prompt lớn lên Google Gemini API thì bị treo vô tận (CPU 0%, GPU 0%), socket TCP giữ trạng thái `Established` hàng chục phút mà không có bất kỳ tiến triển nào.
+- **Root cause**: Lời gọi `model.generate_content(...)` trong SDK `google-generativeai` không thiết lập tham số `request_options={"timeout": ...}`. Khi server Google hoặc đường truyền mạng quốc tế bị delay/nghẽn ngầm, socket chờ vô hạn, không ném exception nên không thể kích hoạt cơ chế Smart Key Rotation và Fallback sang SambaNova/Groq.
+- **Fix**: 
+  1. Thêm `request_options={"timeout": 45.0}` vào `model.generate_content(...)`.
+  2. Bổ sung các model chính thức (`gemini-2.0-flash`, `gemini-1.5-flash`, `gemini-flash-latest`, `gemini-pro-latest`) thay vì các model ảo `3.8`.
+  3. Cập nhật bắt lỗi timeout chuyển ngay sang Key tiếp theo sau tối đa 2 lần thử, triệt tiêu hoàn toàn nguy cơ đứng ứng dụng.
+### Lỗi Tất Cả Groq/SambaNova/OpenRouter Keys Bị Lỗi Do Model Cũ Bị Decommissioned (400/404)
+- **Ngày**: 2026-09-10
+- **Vấn đề**: Toàn bộ keys dự phòng của Groq/SambaNova/OpenRouter báo thất bại hàng loạt, ứng dụng không thể fallback khi Gemini bận.
+- **Root cause**: Các nhà cung cấp API đã khai tử hoặc gỡ bỏ các model cũ (ví dụ Groq: `mixtral-8x7b-32768` HTTP 400 decommissioned, `llama-3.3-70b-versatile`, `llama-3.1-8b-instant`, `gemma2-9b-it` HTTP 404; SambaNova: `Meta-Llama-3.1-8B-Instruct` 404; OpenRouter: các model trả phí báo 404 trên tài khoản free-tier). Tool kích hoạt cơ chế `_DISABLED_MODELS` đưa toàn bộ model vào blacklist khiến các key tiếp theo bị bỏ qua hoàn toàn. Ngoài ra, có 2 key Groq bị HTTP 401 do key hết hạn/sai chuỗi.
+- **Fix**:
+  1. Loại bỏ các key chết khỏi `.env`.
+  2. Cập nhật danh sách `models_to_try` trong `analyzer.py` sang các model mới nhất đang hoạt động:
+     - Groq: `qwen/qwen3.8-27b`, `groq/compound-mini`, `qwen/qwen3.6-27b`, `openai/gpt-oss-120b`, `openai/gpt-oss-20b`
+     - SambaNova: `Meta-Llama-3.3-70B-Instruct`, `DeepSeek-V3.2`, `gemma-4-31B-it`, `gpt-oss-120b`
+     - OpenRouter: `nex-agi/nex-n2.5-pro:free`, `nvidia/nemotron-3.5-lightning:free`, `liquid/lfm-2.5-2.6b:free`
+     - Gemini: `gemini-3.8-flash`, `gemini-3.7-flash`, `gemini-3.6-flash`, `gemini-flash-latest` (loại bỏ `gemini-2.5-flash` đã bị Google khai tử 404)
+- **Files liên quan**: [analyzer.py](file:///e:/AI_Agent/batch_video_cutter/core/analyzer.py), [.env](file:///e:/AI_Agent/.env)
+
+### Tối Ưu Hóa LLM Tiering (Groq-First Primary) & Triệt Tiêu Lặp Lại Key Hết Quota (429)
+- **Ngày**: 2026-09-11
+- **Vấn đề**: Gemini API Free-tier siết chặt Quota xuống chỉ 20 requests/ngày/project cho model mới `gemini-3.6-flash` và thường xuyên nghẽn mạng. Đồng thời, mỗi khi chuyển sang cắt video mới trong batch, hệ thống lại duyệt lại từ Key #1 của Gemini làm tốn thời gian timeout và thử lại các key đã cạn Quota.
+- **Root cause**: 
+  1. Gemini được đặt làm Primary Tier mặc dù tốc độ inference chậm (5-15s) so với Groq (~1s).
+  2. Hệ thống chỉ lưu Blacklist Key khi bị 401/403 (`_DISABLED_KEYS`), khi gặp lỗi 429 Quota Exceeded chỉ `break` trong phạm vi request hiện tại chứ KHÔNG lưu vào blacklist của session.
+- **Fix**:
+  1. Đẩy **Groq API** lên làm **Tầng 1 (Primary Tier)**: Tốc độ phản hồi cực nhanh ~0.5 - 1.5s, tận dụng tối đa 12 Groq keys trong `.env`.
+  2. Chuyển Gemini thành Tầng 2, SambaNova Tầng 3, OpenRouter Tầng 4 qua hàm điều phối thống nhất `_call_llm_api()`.
+  3. Bổ sung `_EXHAUSTED_KEYS` set lưu vết session: Khi bất kỳ key nào dính 429 Quota Exceeded / Resource Exhausted, lập tức khóa key đó trong toàn bộ runtime session. Các video tiếp theo tự động nhảy thẳng qua các key này với chi phí 0ms.
+### Lỗi Groq Báo Server Busy 429 Do Vượt Hạn Mức Token Đầu Ra (OTPM Limit)
+- **Ngày**: 2026-09-11
+- **Vấn đề**: Khi chạy Groq API, terminal liên tục cảnh báo `⏳ Groq Server Busy (429). Retry sau 2s...` mặc dù máy chủ Groq không hề bị quá tải.
+- **Root cause**: 
+  1. Groq Free Tier quy định giới hạn an toàn **OTPM (Output Tokens Per Minute)** rất nghiêm ngặt (chỉ 1,000 tokens/phút đối với một số model như `qwen/qwen3.8-27b`).
+  2. Code cấu hình `"max_tokens": 2048` vượt quá giới hạn 1,000 tokens của Gateway Groq, dẫn đến HTTP 429: `"The request's expected output tokens exceed the enforced limit; reduce max_tokens and try again"`.
+  3. Lỗi 429 này bị bắt chung vào nhánh `server busy` dẫn đến việc retry vô ích sau 2s, 4s.
+- **Fix**:
+  1. Giảm `max_tokens` của Groq từ `2048` xuống `800` (đáp ứng thừa cho 5-10 clip JSON ~300 tokens, triệt tiêu 100% lỗi OTPM limit).
+  2. Ưu tiên model `groq/compound-mini` và `openai/gpt-oss-120b` lên đầu danh sách `models_to_try` (hạn mức token rộng, tốc độ phản hồi ~0.9s).
+  3. Bổ sung nhánh lọc riêng cho lỗi `otpm` / `expected output tokens exceed` để tự động đổi model tiếp theo ngay lập tức thay vì hiểu nhầm là "Server Busy".
+  4. Đồng bộ hạ `max_tokens` của SambaNova và OpenRouter xuống `1000`.
 - **Files liên quan**: [analyzer.py](file:///e:/AI_Agent/batch_video_cutter/core/analyzer.py)
+
+### Lỗi Groq HTTP 413: Payload Too Large Do Vượt Hạn Mức Tokens/Phút (TPM Rate Limit)
+- **Ngày**: 2026-09-12
+- **Vấn đề**: Khi xử lý video có transcript dài (~6800 chars), Groq ném lỗi `HTTP Error 413: Payload Too Large` và tool duyệt qua toàn bộ 12 keys Groq rồi thất bại.
+- **Root cause**: 
+  1. Trên Groq API, mã `HTTP 413` được trả về khi request vượt quá hạn ngạch **TPM (Tokens Per Minute - rate_limit_exceeded)** còn lại của API key trong phút đó.
+  2. Code chưa phân loại mã lỗi `413` nên rơi vào nhánh `else: break`, không đánh dấu `key_exhausted = True` mà tiếp tục thử các model khác trên CÙNG MỘT KEY ĐÃ CẠN TPM.
+  3. Transcript gửi cho LLM bị phình to do gắn các tag rườm rà `[SHOW INTRO - DO NOT SELECT]`.
+- **Fix**:
+  1. Bổ sung nhánh bắt riêng mã lỗi `413`, `payload too large`, `tokens per minute`, `rate_limit_exceeded`: Đưa key vào `_EXHAUSTED_KEYS`, gán `key_exhausted = True` và chuyển ngay sang KEY Groq tiếp theo.
+  2. Thêm model `groq/compound` (hạn mức 70,000 TPM cao nhất) vào đầu danh sách `models_to_try`.
+  3. Lược bỏ các tag thừa trong `format_transcript_for_llm`, giảm 30% kích thước transcript.
+  4. Thêm log cảnh báo cho nhánh `else:` thay vì im lặng `break`.
+- **Files liên quan**: [analyzer.py](file:///e:/AI_Agent/batch_video_cutter/core/analyzer.py), [transcriber.py](file:///e:/AI_Agent/batch_video_cutter/core/transcriber.py), [test_groq_first_waterfall.py](file:///e:/AI_Agent/tests/test_groq_first_waterfall.py)
+
+
+
 
 ---
 

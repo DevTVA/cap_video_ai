@@ -5,7 +5,7 @@
 """
 
 from typing import Optional, Tuple
-from .base import BaseStyle, CaptionArea, HIGHLIGHT_COLOR_GREEN
+from .base import BaseStyle, CaptionArea, HIGHLIGHT_COLOR_BLUE
 
 
 class Style5(BaseStyle):
@@ -83,21 +83,9 @@ class Style5(BaseStyle):
     def get_subtitle_position(self) -> str:
         return "bottom"
 
-    def get_highlight_color(self) -> str:
-        """Màu Highlight MÀU XANH LÁ (HIGHLIGHT_COLOR_GREEN chuẩn Style 3)."""
-        return HIGHLIGHT_COLOR_GREEN
-
-    def get_font_size(self) -> int:
-        """Cỡ font 66pt bằng cỡ chữ Style 1 chuẩn đẹp."""
-        return 66
-
-    def get_margin_v(self) -> int:
-        """Lề dưới 110px vị trí chuẩn đẹp giống Style 1."""
-        return 110
-
     def get_italic_option(self) -> bool:
         return False
 
     def get_max_clips(self) -> Optional[int]:
-        """Phong cách 5 cắt 2 đoạn viral."""
-        return 2
+        """Phong cách 5 cắt 3 đoạn viral."""
+        return 3

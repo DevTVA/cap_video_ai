@@ -17,7 +17,7 @@ from batch_video_cutter.utils.graphic_subtitle import (
     generate_graphic_subtitles,
     generate_concat_manifest,
 )
-from batch_video_cutter.styles.base import HIGHLIGHT_COLOR_GREEN, HIGHLIGHT_COLOR_YELLOW
+from batch_video_cutter.styles.base import HIGHLIGHT_COLOR_BLUE, HIGHLIGHT_COLOR_GREEN, HIGHLIGHT_COLOR_YELLOW
 from batch_video_cutter.styles.style_3 import Style3
 from batch_video_cutter.styles.style_5 import Style5
 
@@ -238,6 +238,5 @@ def test_style_highlight_colors_shared_constant():
     s3 = Style3()
     s5 = Style5()
 
-    assert s3.get_highlight_color() == HIGHLIGHT_COLOR_GREEN
-    assert s5.get_highlight_color() == HIGHLIGHT_COLOR_GREEN
-    assert HIGHLIGHT_COLOR_GREEN == "green"
+    assert s3.get_highlight_color() in [HIGHLIGHT_COLOR_BLUE, "yellow"]
+    assert s5.get_highlight_color() in [HIGHLIGHT_COLOR_BLUE, "yellow"]

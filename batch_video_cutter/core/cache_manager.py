@@ -62,6 +62,14 @@ def get_cached_transcript(cache_key: str) -> Optional[TranscriptResult]:
                 )
             )
 
+        if not segments or data.get("duration", 0.0) <= 0.0:
+            logger.warning(f"Transcript Cache ({cache_key}) rỗng hoặc không có segments, tự động xóa để bóc băng lại.")
+            try:
+                cache_file.unlink(missing_ok=True)
+            except Exception:
+                pass
+            return None
+
         return TranscriptResult(
             segments=segments,
             language=data.get("language", "en"),
@@ -71,7 +79,11 @@ def get_cached_transcript(cache_key: str) -> Optional[TranscriptResult]:
             timestamp_source=data.get("timestamp_source", "whisper"),
         )
     except Exception as e:
-        logger.warning(f"Lỗi khi đọc Transcript Cache ({cache_key}): {e}")
+        logger.warning(f"Lỗi khi đọc Transcript Cache ({cache_key}): {e}. Tự động dọn dẹp cache hỏng.")
+        try:
+            cache_file.unlink(missing_ok=True)
+        except Exception:
+            pass
         return None
 
 

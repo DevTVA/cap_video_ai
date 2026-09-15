@@ -12,6 +12,7 @@ from typing import Optional
 HIGHLIGHT_COLOR_GREEN: str = "green"
 HIGHLIGHT_COLOR_YELLOW: str = "yellow"
 HIGHLIGHT_COLOR_RED: str = "red"
+HIGHLIGHT_COLOR_BLUE: str = "blue"
 
 
 @dataclass
@@ -102,17 +103,28 @@ class BaseStyle(ABC):
         return "Impact"
 
     def get_font_size(self) -> int:
-        """Kích thước font chữ mặc định cho style (66pt bằng tỉ lệ cỡ chữ Outcard)."""
+        """Kích thước font chữ chuẩn hóa toàn hệ thống (66pt tỉ lệ chuẩn nét cao)."""
         return 66
 
     def get_margin_v(self) -> int:
-        """Khoảng cách lề dưới phụ đề (margin vertical). Mặc định 110px cho vị trí đẹp chuẩn."""
+        """Khoảng cách lề dưới phụ đề chuẩn hóa cho toàn bộ Style.
+
+        Tự động cân đối theo chiều cao Canvas để nằm trong Safe Zone của TikTok / Shorts / Reels:
+        - Canvas 1:1 (h <= 1080): 110px
+        - Canvas 3:4 (h == 1440): 160px
+        - Canvas 9:16 (h >= 1920): 330px
+        """
+        _, h = self.get_output_resolution()
+        if h >= 1920:
+            return 330
+        elif h >= 1440:
+            return 160
         return 110
 
 
     def get_highlight_color(self) -> str:
-        """Màu Highlight từ active ("green")."""
-        return HIGHLIGHT_COLOR_GREEN
+        """Màu Highlight từ active chuẩn hóa ("yellow" - Vàng tươi neon #FFE600 nổi bật trên hộp nền Pill Box)."""
+        return HIGHLIGHT_COLOR_YELLOW
 
     def get_italic_option(self) -> bool:
         """Có nghiêng chữ (Italic Slant) hay không."""

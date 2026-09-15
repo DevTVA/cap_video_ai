@@ -67,8 +67,15 @@ def cut_and_render_clip(
     else:
         in_w, in_h = res
 
-    # Ưu tiên hoàn toàn luồng ảnh PNG (nếu có), cấm nạp file ASS cũ để tránh đè lớp kép
+    # Ưu tiên hoàn toàn luồng ảnh PNG Karaoke (nếu có), cấm nạp file ASS cũ để tránh đè lớp kép
+    has_karaoke_png = False
     if timed_emojis:
+        for item in timed_emojis:
+            if item and Path(item[0]).exists() and "top_caption" not in Path(item[0]).name:
+                has_karaoke_png = True
+                break
+
+    if has_karaoke_png:
         sub_str = None
     else:
         sub_str = str(subtitle_path.resolve()) if subtitle_path and subtitle_path.exists() else None
@@ -103,8 +110,8 @@ def cut_and_render_clip(
 
         last_label = output_label.strip("[]")
         
-        # Bước 2: Chuẩn hóa fps=30 cố định cho luồng video chính ngay trước khi overlay
-        filter_complex += f";[{last_label}]fps=30[v_fps_norm]"
+        # Bước 2: Chuẩn hóa PTS và fps=30 cố định cho luồng video chính ngay trước khi overlay
+        filter_complex += f";[{last_label}]setpts=PTS-STARTPTS,fps=30[v_fps_norm]"
         last_label = "v_fps_norm"
 
         karaoke_items = []
@@ -136,7 +143,7 @@ def cut_and_render_clip(
 
             out_label = f"v_out_concat"
             filter_complex += (
-                f";[{concat_input_idx}:v]format=yuva420p[subs_stream]"
+                f";[{concat_input_idx}:v]setpts=PTS-STARTPTS,fps=30,format=yuva420p[subs_stream]"
                 f";[{last_label}][subs_stream]overlay=0:0:eof_action=pass[{out_label}]"
             )
             last_label = out_label
@@ -200,13 +207,13 @@ def cut_and_render_clip(
 
         # Audio stream: Tăng âm lượng thoại gốc 1.3x, tắt về 0 khi outcard chạy, phát âm thanh outcard
         filter_complex += (
-            f";[0:a]volume=eval=frame:volume='if(gte(t,{outcard_start_s:.3f}),0,{audio_volume:.2f})'[a_main_vol]"
+            f";[0:a]asetpts=PTS-STARTPTS,volume=eval=frame:volume='if(gte(t,{outcard_start_s:.3f}),0,{audio_volume:.2f})'[a_main_vol]"
             f";[{outcard_input_idx}:a]adelay=delays={int(outcard_start_s * 1000)}:all=1[a_outcard_delay]"
             f";[a_main_vol][a_outcard_delay]amix=inputs=2:duration=first[a_final]"
         )
     else:
         # Tăng âm lượng video gốc lên 1.3x
-        filter_complex += f";[0:a]volume={audio_volume:.2f}[a_final]"
+        filter_complex += f";[0:a]asetpts=PTS-STARTPTS,volume={audio_volume:.2f}[a_final]"
 
     encoder_name, codec_flags = get_best_video_encoder(enable_gpu=enable_gpu, cpu_preset=cpu_preset)
 
@@ -224,6 +231,7 @@ def cut_and_render_clip(
         "-c:a", "aac",
         "-b:a", "192k",
         "-pix_fmt", "yuv420p",
+        "-avoid_negative_ts", "make_zero",
         "-movflags", "+faststart",
         str(output_path),
     ]

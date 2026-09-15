@@ -5,7 +5,7 @@
 """
 
 from typing import Optional, Tuple
-from .base import BaseStyle, CaptionArea
+from .base import BaseStyle, CaptionArea, HIGHLIGHT_COLOR_BLUE
 
 
 class Style4(BaseStyle):
@@ -77,18 +77,6 @@ class Style4(BaseStyle):
 
     def get_subtitle_position(self) -> str:
         return "bottom"
-
-    def get_highlight_color(self) -> str:
-        """Màu Highlight MÀU XANH LÁ ("green")."""
-        return "green"
-
-    def get_font_size(self) -> int:
-        """Cỡ font 56pt vừa vặn cho Canvas 3:4."""
-        return 56
-
-    def get_margin_v(self) -> int:
-        """Lề dưới 160px chuẩn phong cách 4."""
-        return 160
 
     def get_italic_option(self) -> bool:
         return False

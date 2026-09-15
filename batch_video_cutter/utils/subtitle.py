@@ -425,6 +425,7 @@ class SubtitleLayoutEngine:
         # 3. Fallback sang các font chất lượng cao sẵn có trong assets/fonts
         fonts_dir = Path(__file__).parent.parent / "assets" / "fonts"
         fallback_names = [
+            "MYRIADPRO-BLACK_0.OTF",
             "Impact.ttf",
             "impact.ttf",
             "Montserrat-Bold.ttf",
@@ -553,8 +554,8 @@ class SubtitleLayoutEngine:
             chunk_text = " ".join(w[0].strip() for w in chunk)
             chunk_width = cls.measure_text_width(chunk_text, font)
 
-            # Ưu tiên ngắt phụ đề thành 2 dòng cân bằng (2-Line Stacked Subtitle) khi cụm từ có 3 từ trở lên
-            if len(chunk) <= 2:
+            # Giữ 1 dòng nếu cụm vừa độ rộng an toàn (< max_width_px * 0.85) và <= 4 từ (tránh ép câu 3 từ ngắn bị bẻ đôi 2 dòng gây nhảy giật liên tục)
+            if chunk_width <= int(max_width_px * 0.85) and len(chunk) <= 4 and len(chunk_text) <= 22:
                 final_layout_chunks.append((chunk, []))
             else:
                 best_split = len(chunk) // 2
@@ -672,6 +673,7 @@ COLOR_MAP = {
     "red": "&H000000FF&",     # Đỏ rực #FF0000
     "yellow": "&H0000FFFF&",  # Vàng tươi #FFFF00
     "cyan": "&H00FFFF00&",    # Xanh ngọc #00FFFF
+    "blue": "&H00FFD400&",    # Xanh dương Electric #00D4FF
     "white": "&H00FFFFFF&",   # Trắng tinh
 }
 
@@ -704,13 +706,14 @@ def generate_ass_subtitle(
     font_size: int = 85,
     primary_color: str = "&H00FFFFFF",    # TRẮNG TƯƠI
     outline_color: str = "&H00000000",    # VIỀN ĐEN DÀY SIÊU MẬP
-    highlight_color_name: str = "yellow", # Màu Vàng tươi cố định chuẩn
+    highlight_color_name: str = "blue",   # Màu Xanh dương Electric (#00D4FF)
     italic: bool = False,                 # Nghiêng chữ (Slant)
     position: str = "bottom",
     margin_v: int = 180,
     emoji_on_top: bool = True,            # Bật hiển thị Emoji sinh động màu sắc
     canvas_size: Tuple[int, int] = (1080, 1080),
     outcard_start_s: Optional[float] = None,
+    enable_pill_box: bool = False,
 ) -> Path:
     """Tạo file ASS subtitle CapCut hoặc Graphic Subtitle PNG Layer chuẩn 100% đồng bộ."""
     import random
@@ -720,26 +723,7 @@ def generate_ass_subtitle(
     alignment = 8 if position == "top" else 2
     italic_flag = 1 if italic else 0
 
-    # Nếu emoji_on_top được bật, sử dụng Graphic Subtitle Layer bằng Pillow để chữ và emoji là 1 khối duy nhất 100% đồng bộ
-    if emoji_on_top:
-        from .graphic_subtitle import generate_graphic_subtitles
-        tmp_dir = output_path.parent / "g_subs_tmp"
-        graphic_frames = generate_graphic_subtitles(
-            subtitle_lines,
-            tmp_dir=tmp_dir,
-            font_name=font_name,
-            font_size=font_size,
-            primary_color=primary_color,
-            highlight_color_name=highlight_color_name,
-            margin_v=margin_v,
-            emoji_on_top=True,
-            canvas_size=canvas_size,
-            position=position,
-            outcard_start_s=outcard_start_s,
-        )
-        return output_path, graphic_frames
-
-    # 3 màu Highlight chuẩn CapCut: Xanh lá, Vàng, Đỏ
+    # 1. Tạo file ASS subtitle tương thích ngược
     dynamic_colors = [COLOR_MAP["green"], COLOR_MAP["yellow"], COLOR_MAP["red"]]
     color_counter = 0
 
@@ -761,7 +745,6 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
 
     events: List[str] = []
-    timed_emojis: List[tuple] = []
     font = SubtitleLayoutEngine.get_font(font_name, font_size)
 
     chunks = SubtitleChunker.chunk_lines(
@@ -780,7 +763,12 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             continue
 
         for active_idx, active_word_info in enumerate(all_w):
-            w_word, w_start, w_end = active_word_info
+            w_word, w_start, _ = active_word_info
+            if active_idx < len(all_w) - 1:
+                w_end = all_w[active_idx + 1][1]
+            else:
+                w_end = chunk.end
+
             start_time = _seconds_to_ass_time(w_start)
             end_time = _seconds_to_ass_time(w_end)
 
@@ -813,11 +801,28 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     content = header + "\n".join(events) + "\n"
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(content, encoding="utf-8-sig")
-
     logger.info(f"Tạo ASS Subtitle CapCut: {output_path} ({len(events)} events)")
-    return output_path, timed_emojis
 
-
+    # 2. LUÔN LUÔN sử dụng Graphic Subtitle Layer bằng Pillow để xuất các khung hình chất lượng cao chuẩn CapCut
+    # Hộp Pill Box bo góc 24px + Floating Depth Shadow + Active Highlight vàng neon.
+    # emoji_on_top điều khiển việc có chèn emoji hay không (người dùng tắt icon -> emoji_on_top=False).
+    from .graphic_subtitle import generate_graphic_subtitles
+    tmp_dir = output_path.parent / "g_subs_tmp"
+    graphic_frames = generate_graphic_subtitles(
+        subtitle_lines,
+        tmp_dir=tmp_dir,
+        font_name=font_name,
+        font_size=font_size,
+        primary_color=primary_color,
+        highlight_color_name=highlight_color_name,
+        margin_v=margin_v,
+        emoji_on_top=emoji_on_top,
+        canvas_size=canvas_size,
+        position=position,
+        outcard_start_s=outcard_start_s,
+        enable_pill_box=enable_pill_box,
+    )
+    return output_path, graphic_frames
 
 
 def create_subtitles_from_transcript(
@@ -828,23 +833,30 @@ def create_subtitles_from_transcript(
     position: str = "bottom",
     font_name: str = "Montserrat Black",
     font_size: int = 80,
-    highlight_color_name: str = "green",
+    highlight_color_name: str = "blue",
     italic: bool = False,
-    add_emojis: bool = True,
+    add_emojis: bool = False,
     canvas_size: Tuple[int, int] = (1080, 1080),
     outcard_start_s: Optional[float] = None,
     margin_v: int = 110,
+    subtitle_time_offset: float = 0.0,
+    enable_pill_box: bool = False,
 ) -> tuple:
     """Tạo file ASS subtitle CapCut Active Word từ transcript segments và trả về (sub_path, timed_emojis)."""
+    from ..core.transcriber import WordSegment
+
     subtitle_lines: List[SubtitleLine] = []
     clip_dur = max(0.0, clip_end - clip_start)
 
     for seg in segments:
-        if seg.end <= clip_start or seg.start >= clip_end:
+        eff_start = seg.start + subtitle_time_offset
+        eff_end = seg.end + subtitle_time_offset
+
+        if eff_end <= clip_start or eff_start >= clip_end:
             continue
 
-        relative_start = round(max(0.0, seg.start - clip_start), 4)
-        relative_end = round(min(clip_dur, seg.end - clip_start), 4)
+        relative_start = round(max(0.0, eff_start - clip_start), 4)
+        relative_end = round(min(clip_dur, eff_end - clip_start), 4)
 
         if relative_end <= relative_start:
             continue
@@ -852,8 +864,27 @@ def create_subtitles_from_transcript(
         words = []
         ts_source = "whisper"
         if hasattr(seg, "words") and seg.words:
+            shifted_words = []
+            for w in seg.words:
+                if hasattr(w, "start") and hasattr(w, "end"):
+                    shifted_words.append(WordSegment(
+                        word=w.word,
+                        start=round(w.start + subtitle_time_offset, 4),
+                        end=round(w.end + subtitle_time_offset, 4),
+                        probability=getattr(w, "probability", 1.0),
+                        timing_source=getattr(w, "timing_source", "whisper"),
+                    ))
+                elif isinstance(w, tuple) and len(w) >= 3:
+                    shifted_words.append((
+                        w[0],
+                        round(w[1] + subtitle_time_offset, 4),
+                        round(w[2] + subtitle_time_offset, 4),
+                    ))
+                else:
+                    shifted_words.append(w)
+
             normalized_wt = normalize_word_timings(
-                seg.words,
+                shifted_words,
                 range_start=clip_start,
                 range_end=clip_end,
                 make_relative=True,
@@ -880,6 +911,28 @@ def create_subtitles_from_transcript(
         line = SubtitleTimingValidator.validate_and_fix_line(line, clip_duration=clip_dur)
         subtitle_lines.append(line)
 
+    # Sắp xếp và triệt tiêu overlap giữa các SubtitleLine (đảm bảo timeline monotonic)
+    subtitle_lines.sort(key=lambda x: (x.start, x.end))
+    sanitized_lines: List[SubtitleLine] = []
+    for line in subtitle_lines:
+        if not line.words and not line.text.strip():
+            continue
+        if sanitized_lines:
+            prev = sanitized_lines[-1]
+            if line.start < prev.end:
+                if line.start <= prev.start + 0.05:
+                    # Bắt đầu gần như cùng lúc với prev -> bỏ qua dòng trùng lặp
+                    continue
+                # Gối đầu: prev.end kết thúc đúng lúc line.start bắt đầu
+                prev.end = round(line.start, 4)
+                if prev.words:
+                    prev.words = [w for w in prev.words if w[1] < prev.end]
+                    if prev.words and prev.words[-1][2] > prev.end:
+                        prev.words[-1] = (prev.words[-1][0], prev.words[-1][1], prev.end)
+        if line.end > line.start + 0.05:
+            sanitized_lines.append(line)
+    subtitle_lines = sanitized_lines
+
     return generate_ass_subtitle(
         subtitle_lines,
         output_path,
@@ -892,5 +945,6 @@ def create_subtitles_from_transcript(
         emoji_on_top=add_emojis,
         canvas_size=canvas_size,
         outcard_start_s=outcard_start_s,
+        enable_pill_box=enable_pill_box,
     )
 

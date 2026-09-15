@@ -4,6 +4,7 @@
 import os
 import sys
 from pathlib import Path
+from typing import Optional
 import click
 from rich.console import Console
 from rich.panel import Panel
@@ -93,11 +94,26 @@ console = Console()
     help="Chế độ căn chỉnh phụ đề: 'auto' (mặc định: align chuẩn xác theo audio bằng Whisper), 'fast' (nội suy mốc từ nhanh theo số ký tự, bỏ qua Whisper), 'deep' (bắt buộc Whisper align).",
 )
 @click.option(
-    "--force",
-    "-force",
-    is_flag=True,
+    "--subtitle-file",
+    default=None,
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    help="Đường dẫn file phụ đề tùy chỉnh (.srt hoặc .txt) nạp trực tiếp.",
+)
+@click.option(
+    "--force/--no-force",
+    default=True,
+    help="Luôn render lại clip mới và ghi đè phiên bản mới nhất, không skip (mặc định: --force).",
+)
+@click.option(
+    "--cache/--no-cache",
     default=False,
-    help="Ép buộc render lại tất cả các clip, bỏ qua cache state cũ.",
+    help="Bật/tắt lưu và nạp transcript cache (mặc định: --no-cache để mỗi lần chạy đều được làm mới hoàn toàn).",
+)
+@click.option(
+    "--subtitle-offset",
+    default=0.0,
+    type=float,
+    help="Độ lệch thời gian phụ đề (giây), 0.0 là chuẩn thời gian thực theo mốc Whisper, số âm để hiện sớm hơn, số dương để hiện muộn hơn (mặc định: 0.0s).",
 )
 def main_cli(
     input_dir: Path,
@@ -113,7 +129,10 @@ def main_cli(
     preset: str,
     render_workers: int,
     subtitle_align: str,
+    subtitle_file: Optional[Path],
     force: bool,
+    cache: bool,
+    subtitle_offset: float,
 ):
     """Entry point cho CLI."""
     console.print(
@@ -125,10 +144,15 @@ def main_cli(
     )
 
     gemini_key = api_key or os.getenv("GEMINI_API_KEY", "")
-    if not gemini_key:
+    groq_key = os.getenv("GROQ_API_KEY", "").strip()
+    sambanova_key = os.getenv("SAMBANOVA_API_KEY", "").strip()
+    openrouter_key = os.getenv("OPENROUTER_API_KEY", "").strip()
+
+    if not gemini_key and not groq_key and not sambanova_key and not openrouter_key:
         console.print(
-            "[bold red]LỖI: Chưa có Gemini API Key![/bold red]\n"
-            "Vui lòng truyền `--api-key YOUR_KEY` hoặc cài biến môi trường `GEMINI_API_KEY` trong file .env."
+            "[bold red]LỖI: Chưa có AI API Key nào![/bold red]\n"
+            "Vui lòng truyền `--api-key YOUR_KEY` hoặc cấu hình ít nhất một trong các biến: "
+            "`GROQ_API_KEY`, `GEMINI_API_KEY`, `SAMBANOVA_API_KEY`, `OPENROUTER_API_KEY` trong file .env."
         )
         sys.exit(1)
 
@@ -146,7 +170,10 @@ def main_cli(
         ffmpeg_preset=preset,
         max_render_workers=render_workers,
         subtitle_align=subtitle_align,
+        subtitle_file=subtitle_file,
         force_rerender=force,
+        use_cache=cache,
+        subtitle_time_offset=subtitle_offset,
     )
 
 
