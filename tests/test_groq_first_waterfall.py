@@ -43,29 +43,29 @@ def test_session_quota_blacklist_skips_exhausted_key():
 
 
 def test_waterfall_tiering_order():
-    """Test that _call_llm_api calls Gemini first, then Groq, then SambaNova, then OpenRouter."""
+    """Test that _call_llm_api calls Groq first, then Gemini, then SambaNova, then OpenRouter."""
     with patch("batch_video_cutter.core.analyzer._call_gemini_api") as mock_gemini, \
          patch("batch_video_cutter.core.analyzer._call_groq_api") as mock_groq, \
          patch("batch_video_cutter.core.analyzer._call_sambanova_api") as mock_samba, \
          patch("batch_video_cutter.core.analyzer._call_openrouter_api") as mock_openrouter:
 
-        # Scenario 1: Gemini succeeds
-        mock_gemini.return_value = "Gemini Result"
-        res = _call_llm_api("prompt", gemini_api_key="fake_gemini")
-        assert res == "Gemini Result"
-        mock_gemini.assert_called_once()
-        mock_groq.assert_not_called()
-
-        # Scenario 2: Gemini fails -> Groq called
-        mock_gemini.reset_mock()
-        mock_groq.reset_mock()
-        mock_gemini.side_effect = RuntimeError("Gemini exhausted")
+        # Scenario 1: Groq succeeds
         mock_groq.return_value = "Groq Result"
-
         res = _call_llm_api("prompt", gemini_api_key="fake_gemini")
         assert res == "Groq Result"
-        mock_gemini.assert_called_once()
         mock_groq.assert_called_once()
+        mock_gemini.assert_not_called()
+
+        # Scenario 2: Groq fails -> Gemini called
+        mock_gemini.reset_mock()
+        mock_groq.reset_mock()
+        mock_groq.side_effect = RuntimeError("Groq exhausted")
+        mock_gemini.return_value = "Gemini Result"
+
+        res = _call_llm_api("prompt", gemini_api_key="fake_gemini")
+        assert res == "Gemini Result"
+        mock_groq.assert_called_once()
+        mock_gemini.assert_called_once()
 
 
 def test_groq_413_payload_too_large_does_not_blacklist_key():

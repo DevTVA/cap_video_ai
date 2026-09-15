@@ -16,6 +16,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Tuple
 
+from dotenv import load_dotenv
+
+load_dotenv()
+
 from loguru import logger
 from ..config import TITLE_MIN_WORDS, TITLE_MAX_WORDS
 
@@ -1285,8 +1289,8 @@ def _call_gemini_api(prompt: str, api_key: str) -> str:
 
 def _call_llm_api(prompt: str, gemini_api_key: Optional[str] = None) -> str:
     """Hàm điều phối gọi LLM API với kiến trúc Waterfall 4 Tầng thông minh:
-    Tầng 1: Gemini API (Ưu tiên số 1, 16 keys)
-    Tầng 2: Groq API (Tầng 2 dự phòng siêu tốc)
+    Tầng 1: Groq API (Ưu tiên số 1 - Siêu tốc ~0.8s, 15 keys)
+    Tầng 2: Gemini API (Tầng 2 dự phòng mạnh mẽ, 16 keys)
     Tầng 3: SambaNova API (Tầng 3 dự phòng siêu tốc)
     Tầng 4: OpenRouter API (Tầng 4 phương án dự phòng cuối)
     """
@@ -1297,22 +1301,22 @@ def _call_llm_api(prompt: str, gemini_api_key: Optional[str] = None) -> str:
 
     last_exc = None
 
-    # 1. Tầng 1: Gemini API (Ưu tiên số 1)
-    if gemini_key:
-        try:
-            logger.info("Đang gọi Tầng 1: Gemini API...")
-            return _call_gemini_api(prompt, gemini_key)
-        except Exception as e:
-            logger.warning(f"Gemini API (Tầng 1) thất bại: {e}. Chuyển sang Tầng dự phòng tiếp theo...")
-            last_exc = e
-
-    # 2. Tầng 2: Groq API (Dự phòng siêu tốc)
+    # 1. Tầng 1: Groq API (Ưu tiên số 1 - Siêu tốc)
     if groq_key:
         try:
-            logger.info("Chuyển sang Tầng 2: Groq API...")
+            logger.info("Đang gọi Tầng 1: Groq API (Siêu tốc)...")
             return _call_groq_api(prompt, groq_key)
         except Exception as e:
-            logger.warning(f"Groq API (Tầng 2) thất bại: {e}. Chuyển sang Tầng dự phòng tiếp theo...")
+            logger.warning(f"Groq API (Tầng 1) thất bại: {e}. Chuyển sang Tầng dự phòng tiếp theo...")
+            last_exc = e
+
+    # 2. Tầng 2: Gemini API (Dự phòng số 2)
+    if gemini_key:
+        try:
+            logger.info("Chuyển sang Tầng 2: Gemini API...")
+            return _call_gemini_api(prompt, gemini_key)
+        except Exception as e:
+            logger.warning(f"Gemini API (Tầng 2) thất bại: {e}. Chuyển sang Tầng dự phòng tiếp theo...")
             last_exc = e
 
     # 3. Tầng 3: SambaNova API
@@ -1334,7 +1338,7 @@ def _call_llm_api(prompt: str, gemini_api_key: Optional[str] = None) -> str:
             last_exc = e
 
     raise RuntimeError(
-        f"Tất cả AI API Providers (Gemini / Groq / SambaNova / OpenRouter) đều thất bại hoặc chưa cài key! "
+        f"Tất cả AI API Providers (Groq / Gemini / SambaNova / OpenRouter) đều thất bại hoặc chưa cài key! "
         f"Lỗi cuối: {last_exc}"
     )
 
