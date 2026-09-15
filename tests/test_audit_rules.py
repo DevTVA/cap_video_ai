@@ -55,10 +55,10 @@ def test_no_fabricated_fallback_title():
 
 def test_dialogue_quality_scoring():
     q_and_a_line = "Why did you do that? Did you see who was there?"
-    assert score_dialogue_quality(q_and_a_line) > 1.2
+    assert score_dialogue_quality(q_and_a_line) > 5.0
 
-    intro_line = "Welcome back to our channel, today we are going to look at"
-    assert score_dialogue_quality(intro_line) < 0.5
+    normal_line = "I was at home eating dinner with my family."
+    assert score_dialogue_quality(normal_line) == 5.0
 
 
 def test_cache_versioning():

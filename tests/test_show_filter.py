@@ -365,3 +365,59 @@ def test_low_confidence_overlap_passes_safety_with_penalty():
     )
     assert res.valid is True
     assert res.non_content_penalty == 0.75  # 1.5 * 0.50
+
+
+# ==============================================================================
+# NHÓM 5: V5 ENHANCEMENT TESTS (PURE DIALOGUE & FALLBACK INTEGRATION)
+# ==============================================================================
+
+def test_dialogue_quality_pure_score_does_not_reject_judge_keyword():
+    """Test that score_dialogue_quality does not zero-out valid court dialogue containing 'judge'."""
+    from batch_video_cutter.core.analyzer import score_dialogue_quality
+    line = "The judge asked her why she lied to the court."
+    score = score_dialogue_quality(line)
+    assert score >= 5.0, f"Score should not be penalized by keyword 'judge': {score}"
+
+
+def test_court_announcer_phrase_detected_accurately():
+    """Test that full announcer command is detected as COURT_ANNOUNCER."""
+    line = "All rise for the honorable judge. Court is now in session."
+    blocks = detect_non_content_segments(line)
+    assert len(blocks) >= 1
+    assert any(b.type == NonContentType.COURT_ANNOUNCER for b in blocks)
+
+
+def test_generate_fallback_respects_mid_video_blocked_segments():
+    """Test that _generate_fallback_segments does not pick windows overlapping with blocked promo."""
+    from batch_video_cutter.core.analyzer import _generate_fallback_segments
+    transcript = (
+        "[00:00] Welcome to the show today.\n"
+        "[00:35] Coming up next, don't go anywhere we will be right back.\n"
+        "[01:05] Did you see the defendant leave the premises?\n"
+        "[01:10] Yes Your Honor, he ran out the back door immediately.\n"
+        "[01:25] Why did you wait so long before calling the police?\n"
+        "[01:30] I was terrified he might come back with a weapon.\n"
+    )
+    # Blocked promo from 35s to 65s
+    blocked = [
+        BlockedSegment(start=35.0, end=65.0, type=NonContentType.SHOW_PROMO, confidence=1.0)
+    ]
+    segs = _generate_fallback_segments(
+        transcript_text=transcript,
+        max_clips=2,
+        video_duration=120.0,
+        intro_offset=30.0,
+        outro_offset=0.0,
+        blocked_segments=blocked,
+    )
+    # Ensure no fallback segment overlaps with [35, 65]
+    for seg in segs:
+        overlap = max(0.0, min(seg.end_time, 65.0) - max(seg.start_time, 35.0))
+        assert overlap == 0.0, f"Fallback segment [{seg.start_time} -> {seg.end_time}] overlapped promo!"
+
+
+def test_filter_version_is_v5():
+    """Test that FILTER_VERSION in analyzer is show-filter-v5."""
+    from batch_video_cutter.core.analyzer import FILTER_VERSION
+    assert FILTER_VERSION == "show-filter-v5"
+

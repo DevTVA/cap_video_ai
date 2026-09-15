@@ -33,7 +33,7 @@ from .show_filter import (
 )
 
 ANALYZER_VERSION = "2.2"
-FILTER_VERSION = "show-filter-v4"
+FILTER_VERSION = "show-filter-v5"
 
 # Threading lock để ngăn các luồng cắt video đồng thời gửi API cùng lúc gây lỗi Rate Limit 429
 _LLM_LOCK = threading.Lock()
@@ -243,19 +243,16 @@ INTRO_KEYWORDS = [
 
 def score_dialogue_quality(text: str) -> float:
     """Đánh giá chất lượng thoại (hội thoại đối đáp vs thuyết minh 1 người).
+    Hàm này thuần túy đánh giá đặc trưng thoại (dialogue signals), KHÔNG đóng vai trò non-content detector.
     - Thưởng điểm mạnh nếu có 2 speaker trở lên.
     - Thưởng điểm cho từ khóa đối đáp kịch tính.
     - Thưởng nhẹ cho dấu hỏi (max +0.5).
-    - Trừ điểm nặng nếu dính từ khóa intro / promo / monologue.
     """
     if not text:
         return 0.0
 
     score = 5.0
     text_lower = text.lower()
-
-    if is_intro_or_monologue_line(text_lower):
-        return 0.0
 
     # 1. Thưởng điểm nếu phát hiện Speaker tags (e.g., Speaker 1:, Speaker A:, Judge:, Host:)
     speakers = set(re.findall(r"\b(?:speaker|person|man|woman|judge|attorney|host)\s*[\w\d]*\b\s*:", text_lower))
@@ -280,14 +277,11 @@ def score_dialogue_quality(text: str) -> float:
 
 
 def is_intro_or_monologue_line(text: str) -> bool:
-    """Kiểm tra xem thoại có chứa từ khóa giới thiệu show / branding / promo hay không."""
+    """Kiểm tra xem thoại có chứa cụm từ giới thiệu show / branding / promo hay không (phrase-based matching)."""
     if not text:
         return False
-    t_lower = text.lower()
-    for ik in INTRO_KEYWORDS:
-        if ik in t_lower:
-            return True
-    return False
+    detected = detect_non_content_segments(text)
+    return len(detected) > 0
 
 
 def _snap_to_sentence_boundary(transcript_text: str, start_time: float, end_time: float) -> Tuple[float, float]:
@@ -331,10 +325,11 @@ def is_segment_clean_and_valid(
     start_time: float,
     end_time: float,
     blocked_segments: Optional[List[BlockedSegment]] = None,
+    min_duration: float = 20.0,
+    max_duration: float = 35.0,
+    min_words: int = 8,
 ) -> bool:
-    """Kiểm tra toàn bộ thời lượng segment [start_time, end_time] qua Safety Gate.
-    Đảm bảo 100% không dính bất kỳ từ khóa Show Branding, Promo Card hay Monologue nào.
-    """
+    """Kiểm tra toàn bộ thời lượng segment [start_time, end_time] qua Safety Gate."""
     if not transcript_text:
         return True
 
@@ -347,18 +342,12 @@ def is_segment_clean_and_valid(
         start_time=start_time,
         end_time=end_time,
         blocked_segments=blocked_segments,
-        min_duration=20.0,
-        max_duration=35.0,
-        min_words=8,
+        min_duration=min_duration,
+        max_duration=max_duration,
+        min_words=min_words,
         spoken_text=spoken_text,
     )
-    if not val_res.valid:
-        return False
-
-    if spoken_text and score_dialogue_quality(spoken_text) < 0.5:
-        return False
-
-    return True
+    return val_res.valid
 
 
 def _extract_spoken_text_in_range(
@@ -786,7 +775,7 @@ def analyze_transcript(
     # Dự phòng Thuật toán Quality Score + Filler Engine khi LLM API thất bại
     logger.warning(f"⚠️ Tất cả {max_attempts} lần thử AI API đều thất bại ({last_error}). Kích hoạt Thuật toán Quality Score làm dự phòng!")
     fallback_segs = _generate_fallback_segments(
-        transcript_text, max_clips, video_duration, intro_offset, outro_offset
+        transcript_text, max_clips, video_duration, intro_offset, outro_offset, blocked_segments=blocked_segments
     )
     if len(fallback_segs) < max_clips and transcript_text:
         fallback_segs = _fill_missing_segments(
@@ -818,11 +807,15 @@ def _generate_fallback_segments(
     video_duration: float,
     intro_offset: float = 0.0,
     outro_offset: float = 0.0,
+    blocked_segments: Optional[List[BlockedSegment]] = None,
 ) -> List[ViralSegment]:
     """Tự động tạo segments từ transcript khi tất cả API Key LLM đều hết quota hoặc gặp lỗi."""
     logger.warning("⚡ Tất cả API Key LLM cạn kiệt Quota. Phân tích transcript bằng Thuật Toán Quality Score!")
     if not transcript_text:
         return []
+
+    if blocked_segments is None:
+        blocked_segments = detect_non_content_segments(transcript_text)
 
     valid_start = intro_offset
     valid_end = max(valid_start + 30.0, (video_duration - outro_offset) if video_duration > 0 else 180.0)
@@ -834,10 +827,24 @@ def _generate_fallback_segments(
         c_end = min(valid_end, c_start + 28.0)
         if c_end - c_start >= 25.0:
             c_text = _extract_spoken_text_in_range(transcript_text, c_start, c_end)
-            if is_segment_clean_and_valid(transcript_text, c_start, c_end):
-                score = score_dialogue_quality(c_text)
-                if score >= 1.0:
-                    candidate_windows.append((score, c_start, c_end, c_text))
+            val_res = validate_candidate_segment(
+                transcript_text=transcript_text,
+                start_time=c_start,
+                end_time=c_end,
+                intro_offset=intro_offset,
+                outro_offset=outro_offset,
+                video_duration=video_duration,
+                blocked_segments=blocked_segments,
+                min_duration=20.0,
+                max_duration=35.0,
+                min_words=8,
+                spoken_text=c_text,
+            )
+            if val_res.valid:
+                base_score = score_dialogue_quality(c_text)
+                final_score = base_score - val_res.non_content_penalty
+                if final_score >= 1.0:
+                    candidate_windows.append((final_score, c_start, c_end, c_text))
         curr += 10.0
 
     candidate_windows.sort(key=lambda x: x[0], reverse=True)

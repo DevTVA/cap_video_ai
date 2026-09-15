@@ -35,6 +35,9 @@ LEVEL_A_PATTERNS: List[Tuple[NonContentType, str, float]] = [
     (NonContentType.COURT_ANNOUNCER, r"\bnow\s+in\s+session\b", 0.95),
     (NonContentType.COURT_ANNOUNCER, r"\border\s+in\s+the\s+court\b", 1.00),
     (NonContentType.COURT_ANNOUNCER, r"\bdocket\s+number\b", 0.95),
+    (NonContentType.COURT_ANNOUNCER, r"\bthis\s+is\s+the\s+court\s+of\b", 0.95),
+    (NonContentType.COURT_ANNOUNCER, r"\bin\s+the\s+court\s+of\b", 0.90),
+    (NonContentType.COURT_ANNOUNCER, r"\bjudge\s+(?:judy|mathis|hatchett|alex|jerry|greg|ross)\b", 0.95),
 
     # Show Promo & Teasers (Mid-video transitions & bumpers)
     (NonContentType.SHOW_PROMO, r"\bcoming\s+up\s+next\b", 1.00),
@@ -65,6 +68,15 @@ LEVEL_A_PATTERNS: List[Tuple[NonContentType, str, float]] = [
     (NonContentType.CTA, r"\bhit\s+that\s+subscribe\s+button\b", 1.00),
     (NonContentType.CTA, r"\bdon'?t\s+forget\s+to\s+subscribe\b", 1.00),
     (NonContentType.CTA, r"\bvisit\s+our\s+website\b", 0.95),
+    (NonContentType.CTA, r"\bđăng\s+ký\s+kênh\b", 0.95),
+    (NonContentType.CTA, r"\bđăng\s+ký\s+ngay\b", 0.95),
+
+    # Show Intro phrases
+    (NonContentType.SHOW_INTRO, r"\bwelcome\s+to\s+our\s+episode\b", 0.95),
+    (NonContentType.SHOW_INTRO, r"\bwelcome\s+to\s+the\s+show\s+everyone\b", 0.98),
+    (NonContentType.SHOW_INTRO, r"\btoday\s+on\s+the\s+show\b", 0.92),
+    (NonContentType.SHOW_INTRO, r"\btoday\s+on\s+judge\b", 0.95),
+    (NonContentType.SHOW_INTRO, r"\btoday\s+we\s+are\s+hosting\b", 0.90),
 ]
 
 # Level B: Contextual Non-Content Phrases (Base Confidence 0.70 - 0.85)
@@ -91,11 +103,19 @@ LEVEL_B_PATTERNS: List[Tuple[NonContentType, str, float]] = [
     (NonContentType.SHOW_INTRO, r"\btoday\s+we\s+are\b", 0.70),
 
     # Vietnamese greetings
+    (NonContentType.SHOW_INTRO, r"\bxin\s+chào\s+tất\s+cả\b", 0.85),
+    (NonContentType.SHOW_INTRO, r"\bxin\s+chào\s+các\s+bạn\b", 0.85),
+    (NonContentType.SHOW_INTRO, r"\bxin\s+chào\b", 0.75),
+    (NonContentType.SHOW_INTRO, r"\bchào\s+mừng\s+tất\s+cả\b", 0.85),
     (NonContentType.SHOW_INTRO, r"\bchào\s+mừng\s+quay\s+trở\s+lại\b", 0.85),
     (NonContentType.SHOW_INTRO, r"\bchào\s+mừng\s+các\s+bạn\b", 0.80),
     (NonContentType.SHOW_INTRO, r"\bchào\s+mừng\b", 0.70),
+    (NonContentType.SHOW_INTRO, r"\bquay\s+trở\s+lại\s+với\s+kênh\b", 0.85),
+    (NonContentType.SHOW_INTRO, r"\bkênh\s+của\s+chúng\s+tôi\b", 0.80),
     (NonContentType.SHOW_INTRO, r"\btập\s+hôm\s+nay\b", 0.75),
-    (NonContentType.CTA, r"\bđăng\s+ký\s+kênh\b", 0.85),
+    (NonContentType.SHOW_INTRO, r"\bchủ\s+đề\s+hôm\s+nay\b", 0.75),
+    (NonContentType.SHOW_INTRO, r"\bchương\s+trình\s+hôm\s+nay\b", 0.75),
+    (NonContentType.OUTRO, r"\bcảm\s+ơn\s+đã\s+xem\b", 0.90),
 ]
 
 
@@ -118,6 +138,7 @@ def map_non_content_to_rejection_reason(non_type: NonContentType) -> CandidateRe
         NonContentType.COMMERCIAL: CandidateRejectionReason.SPONSOR,
         NonContentType.STATION_ID: CandidateRejectionReason.SPONSOR,
         NonContentType.CTA: CandidateRejectionReason.CTA,
+        NonContentType.OUTRO: CandidateRejectionReason.OUTRO_BOUNDARY,
     }
     return mapping.get(non_type, CandidateRejectionReason.NON_CONTENT_OVERLAP)
 
@@ -154,19 +175,21 @@ def detect_non_content_segments(
             elif hasattr(item, "start"):
                 sentence_items.append((float(item.start), float(item.end), str(item.text)))
     elif isinstance(transcript, str):
-        # Fallback phân tích transcript dạng text
+        # Fallback phân tích transcript dạng text (hỗ trợ [mm:ss -> mm:ss] hoặc [mm:ss])
         for line in transcript.split("\n"):
             line_str = line.strip()
             if not line_str:
                 continue
-            # Thử parse timestamp nếu có dạng [mm:ss -> mm:ss]
-            m = re.search(r"\[?(\d+):(\d+)(?:\.(\d+))?\s*(?:->|-|to)\s*(\d+):(\d+)(?:\.(\d+))?\]?\s*(.*)", line_str)
+            m = re.search(r"\[?(\d{1,2}):(\d{2})(?:\.(\d+))?(?:\s*(?:->|-|to)\s*(\d{1,2}):(\d{2})(?:\.(\d+))?)?\]?\s*(.*)", line_str)
             if m:
                 s_m, s_s = int(m.group(1)), int(m.group(2))
-                e_m, e_s = int(m.group(4)), int(m.group(5))
                 st = s_m * 60.0 + s_s
-                et = e_m * 60.0 + e_s
-                txt = m.group(7)
+                if m.group(4) and m.group(5):
+                    e_m, e_s = int(m.group(4)), int(m.group(5))
+                    et = e_m * 60.0 + e_s
+                else:
+                    et = st + 3.0
+                txt = m.group(7) if m.group(7) else line_str
                 sentence_items.append((st, et, txt))
             else:
                 sentence_items.append((0.0, 0.0, line_str))
@@ -294,6 +317,11 @@ def validate_candidate_segment(
             )
 
     # 2. Kiểm tra Overlap với Blocked Segments
+    if blocked_segments is None:
+        source_for_detection = transcript_text or spoken_text or ""
+        if source_for_detection:
+            blocked_segments = detect_non_content_segments(source_for_detection)
+
     non_content_penalty = 0.0
     if blocked_segments:
         for blocked in blocked_segments:

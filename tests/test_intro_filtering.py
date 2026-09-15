@@ -35,11 +35,18 @@ def test_is_intro_or_monologue_line():
 
 
 def test_score_dialogue_quality_intro_penalty():
-    intro_score = score_dialogue_quality("Welcome to the show, subscribe for more episode updates")
+    from batch_video_cutter.core.show_filter import validate_candidate_segment
     normal_score = score_dialogue_quality("What did you see when you entered the room?")
-
-    assert intro_score == 0.0  # Penalized below 0.0 -> clamped to 0.0
     assert normal_score > 5.0
+
+    # Intro line được phát hiện bởi Safety Gate
+    val_res = validate_candidate_segment(
+        transcript_text="[00:10] Welcome to the show, subscribe for more episode updates",
+        start_time=10.0,
+        end_time=38.0,
+        spoken_text="Welcome to the show, subscribe for more episode updates",
+    )
+    assert val_res.valid is False or val_res.non_content_penalty > 0.0
 
 
 def test_convert_raw_segments_skips_intro_opening():
